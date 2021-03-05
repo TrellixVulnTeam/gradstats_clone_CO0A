@@ -63,6 +63,7 @@ def do_train(
     clip_grad_val = 0.0
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
+    enable_adascale = scale > 1.0
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -71,9 +72,10 @@ def do_train(
     model.train()
     start_training_time = time.time()
     end = time.time()
-    # this wrapper has moved to make_optimizer - this has to be done before amp.initialize is called
-    # optimizer = AdaScale(optimizer, scale=scale)
-    optimizer.set_scale(scale)
+    if enable_adascale:
+        # this wrapper has moved to make_optimizer - this has to be done before amp.initialize is called
+        # optimizer = AdaScale(optimizer, scale=scale)
+        optimizer.set_scale(scale)
 
     def prefetcher(load_iterator):
         prefetch_stream = torch.cuda.Stream()
@@ -101,7 +103,7 @@ def do_train(
             current_images, current_targets = next_images, next_targets
             next_images, next_targets = _prefetch()
             yield current_images, current_targets
-    
+
     synchronize()
     optimizer.zero_grad()
     step = 0 # adascale specific
@@ -139,18 +141,23 @@ def do_train(
         elif clip_grad_val > 0.0:
             clip_grad_value_(amp.master_params(optimizer), clip_grad_val) # 0.5 mrcnn sgdw 
 
-        gain = optimizer.scale_invariant_steps() # adascale specific
-        prev_steps = math.floor(step)
-        step = step + gain
-        new_steps = math.floor(step)
-        scale_invariant_steps = new_steps - prev_steps
-        # make adascale step (note that in current implementation this corresponds to gain which may not be same as scale invariant steps, e.g. in NovoGrad case)
-        optimizer.step()
-        # set_grads_to_none(model)
-        optimizer.zero_grad()
-        #FIXME: better interface is scheduler.set_step(curr_effective_step)
-        for _ in range(scale_invariant_steps):
-            scheduler.step() # current scheduler is step based
+        if enable_adascale:
+            gain = optimizer.scale_invariant_steps() # adascale specific
+            prev_steps = math.floor(step)
+            step = step + gain
+            new_steps = math.floor(step)
+            scale_invariant_steps = new_steps - prev_steps
+            # make adascale step (note that in current implementation this corresponds to gain which may not be same as scale invariant steps, e.g. in NovoGrad case)
+            optimizer.step()
+            # set_grads_to_none(model)
+            optimizer.zero_grad()
+            #FIXME: better interface is scheduler.set_step(curr_effective_step)
+            for _ in range(scale_invariant_steps):
+                scheduler.step() # current scheduler is step based
+        else:
+            optimizer.step()
+            optimizer.zero_grad()
+            scheduler.step()
 
         batch_time = time.time() - end
         end = time.time()
@@ -160,6 +167,11 @@ def do_train(
         eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
 
         if iteration % 20 == 0 or iteration == max_iter:
+            if not enable_adascale:
+                # space fillers for logs
+                gain = 1.0
+                step = iteration
+
             logger.info(
                 meters.delimiter.join(
                     [
@@ -180,7 +192,7 @@ def do_train(
                     lr=optimizer.param_groups[0]["lr"],
                     memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
                     gain=gain,
-                    scale=optimizer.scale,
+                    scale=scale,
                     elr=optimizer.param_groups[0]["lr"] * gain,
                     step=step
                 )
@@ -213,3 +225,4 @@ def do_train(
             return False
     else:
         return None
+

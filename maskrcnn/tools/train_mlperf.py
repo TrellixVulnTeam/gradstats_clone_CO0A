@@ -158,8 +158,8 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
     is_fp16 = (cfg.DTYPE == "float16")
 
     LOSS_SCALE='dynamic'
-
-    optimizer = make_optimizer(cfg, model, use_adascale=True, loss_scale=LOSS_SCALE)
+    ENABLE_ADASCALE = cfg.SOLVER.LR_SCALE > 1.0
+    optimizer = make_optimizer(cfg, model, use_adascale=ENABLE_ADASCALE, loss_scale=LOSS_SCALE)
 
     model, optimizer = amp.initialize(model, optimizer,
                                       opt_level="O1",
