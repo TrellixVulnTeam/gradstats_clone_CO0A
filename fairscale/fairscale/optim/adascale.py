@@ -322,7 +322,8 @@ class AdaScale(Optimizer):
 
 
 
-    def gain(self, pg_idx: Optional[int] = None, power_law_ratio=0.618) -> float:
+    #def gain(self, pg_idx: Optional[int] = None, power_law_ratio=0.618) -> float:
+    def gain(self, pg_idx: Optional[int] = None, power_law_ratio=0.7071) -> float:
         """
         Current estimate of the AdaScale gain ratio (r_t in the paper).
 
@@ -339,13 +340,38 @@ class AdaScale(Optimizer):
             return 0.0
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
-        # TODO: print -> log.debug
-        # print("####", self._rank, "####", var, "@@@@", sqr)
         max_scale = self.scale
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
         gain = (var + sqr) / (var / max_scale + sqr)
         return gain
+
+
+#    def noise_scale(self, pg_idx: Optional[int] = None, b_small = 1.0, b_large = 1.0) -> int:
+#        """
+#        Current estimate of noise scale
+#
+#        Args:
+#            pg_idx (int):
+#                Optional index of a parameter group.
+#                Default None: returns "averaged" gain for all groups.
+#
+#        Returns:
+#            (int):
+#                Floor of critical batch size as predicted by A.1 in https://arxiv.org/pdf/1812.06162.pdf
+#        """
+#        if self._gain_invalid:
+#            return 0.0
+#        var = self._grad_var_avg(pg_idx)
+#        sqr = self._grad_sqr_avg(pg_idx)
+#        # TODO: print -> log.debug
+#        # print("####", self._rank, "####", var, "@@@@", sqr)
+#        max_scale = self.scale
+#        if self._is_adaptive:
+#            max_scale = np.power(max_scale, power_law_ratio)
+#        gain = (var + sqr) / (var / max_scale + sqr)
+#        return gain
+#
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
         if self._debias_ewma:
@@ -498,11 +524,6 @@ class AdaScale(Optimizer):
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
-#        if np.isnan(local_grad_sqr) or np.isinf(local_grad_sqr):
-#            print('skipping updates')
-#            self._local_grad_sqr = None
-#            return
-
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
         #
@@ -645,6 +666,7 @@ class AdaScale(Optimizer):
             # When effective world size is large enough, smoothing is probably
             # not needed, so the smoothing factor is 0.
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
+            ## self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0.99)
 
 
     def _calculate_preconditioner(self, pg_idx, param):
@@ -658,3 +680,4 @@ class AdaScale(Optimizer):
         pinv = exp_avg_sq.sqrt().add_(eps)
         # print(param, ":", pinv)
         return pinv
+
