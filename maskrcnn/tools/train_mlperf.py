@@ -244,7 +244,8 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         per_iter_end_callback_fn=per_iter_callback_fn,
         scale=cfg.SOLVER.LR_SCALE,
         clip_grad_norm=cfg.SOLVER.GRADIENT_CLIP_NORM,
-        clip_grad_val=cfg.SOLVER.GRADIENT_CLIP_VAL
+        clip_grad_val=cfg.SOLVER.GRADIENT_CLIP_VAL,
+        record_time=cfg.ENABLE_MEASUREMENT
     )
 
     end_train_time = time.time()

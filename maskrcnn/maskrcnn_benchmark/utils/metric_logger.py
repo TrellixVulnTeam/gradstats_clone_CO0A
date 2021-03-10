@@ -23,6 +23,11 @@ class SmoothedValue(object):
         self.total += value
 
     @property
+    def std(self):
+        d = torch.tensor(list(self.deque))
+        return d.std().item()
+
+    @property
     def median(self):
         d = torch.tensor(list(self.deque))
         return d.median().item()
@@ -61,6 +66,6 @@ class MetricLogger(object):
         loss_str = []
         for name, meter in self.meters.items():
             loss_str.append(
-                "{}: {:.4f} ({:.4f})".format(name, meter.median, meter.global_avg)
+                    "{}: {:.4f} ({:.4f} +/-{:.4f})".format(name, meter.median, meter.global_avg, meter.std)
             )
         return self.delimiter.join(loss_str)

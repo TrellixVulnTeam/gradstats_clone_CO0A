@@ -406,6 +406,7 @@ _C.AMP_VERBOSE = False
 _C.NHWC = False
 # Disable reduced logging
 _C.DISABLE_REDUCED_LOGGING = False
+_C.ENABLE_MEASUREMENT = False
 
 # ---------------------------------------------------------------------------- #
 # MLPerf-specific options
