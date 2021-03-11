@@ -13,7 +13,7 @@ from maskrcnn_benchmark.utils.metric_logger import MetricLogger
 
 from apex import amp
 from torch.nn.utils import clip_grad_norm_, clip_grad_value_
-
+import numpy as np
 
 def reduce_loss_dict(loss_dict):
     """
@@ -65,8 +65,9 @@ def do_train(
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
     enable_adascale = scale > 1.0
-    WARMUP_STEPS=1000 # ignore first 1000 iterations
-
+    WARMUP_STEPS=0 # ignore first few iterations
+    TIMING_INTERVAL_LEN=5000
+    timing_table = np.zeros([TIMING_INTERVAL_LEN, 4]) # data, fwd, bwd, optimizer
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -111,7 +112,8 @@ def do_train(
     optimizer.zero_grad()
     step = 0 # adascale specific
     for iteration, (images, targets) in enumerate(prefetcher(iter(data_loader)), start_iter):
-        do_measure = record_time and iteration > WARMUP_STEPS         
+        do_measure = record_time and iteration > WARMUP_STEPS
+        timing_idx = iteration % TIMING_INTERVAL_LEN
         if per_iter_start_callback_fn is not None:
             per_iter_start_callback_fn(iteration=iteration)
 
@@ -124,6 +126,7 @@ def do_train(
 
         # forward pass - data has been moved to device
         if do_measure:
+            timing_table[timing_idx, 0] = data_time
             torch.cuda.synchronize()
             start_fwd = torch.cuda.Event(enable_timing=True)
             end_fwd = torch.cuda.Event(enable_timing=True)
@@ -133,7 +136,9 @@ def do_train(
         if do_measure:
             end_fwd.record()
             torch.cuda.synchronize()
-            meters.update(fwd_pass=start_fwd.elapsed_time(end_fwd)/1000.0)
+            fwd_time = start_fwd.elapsed_time(end_fwd)/1000.0
+            meters.update(fwd_time=fwd_time)
+            timing_table[timing_idx, 1] = fwd_time
 
         losses = sum(loss for loss in loss_dict.values())
 
@@ -156,8 +161,10 @@ def do_train(
         if do_measure:
             end_bwd.record()
             torch.cuda.synchronize()
-            meters.update(bwd_pass=start_bwd.elapsed_time(end_bwd)/1000.0)
-       
+            bwd_time = start_bwd.elapsed_time(end_bwd)/1000.0
+            meters.update(bwd_time=bwd_time)
+            timing_table[timing_idx, 2] = bwd_time
+
         # TODO: What is a good value for clipping - CHECK Adaptive Gradient Clipping - Ideally this should be inside AdaScale wrapper and not in user code
         if clip_grad_norm > 0.0:
             clip_grad_norm_(amp.master_params(optimizer), clip_grad_norm) # 1.5 mrcnn novo
@@ -187,7 +194,9 @@ def do_train(
             if do_measure:
                 end_opt.record()
                 torch.cuda.synchronize()
-                meters.update(opt_time=start_opt.elapsed_time(end_opt)/1000.0)
+                opt_time = start_opt.elapsed_time(end_opt)/1000.0
+                meters.update(opt_time=opt_time)
+                timing_table[timing_idx, 3] = opt_time
 
             optimizer.zero_grad()
             scheduler.step()
@@ -199,6 +208,13 @@ def do_train(
         eta_seconds = meters.time.global_avg * (max_iter - iteration)
         eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
 
+        if do_measure and iteration > 0 and iteration % TIMING_INTERVAL_LEN == 0:
+            # dump 5000 iteration timings to disk and free timing array
+            timing_filename = 'timing_{}_{}.npy'.format(iteration-5000, iteration)
+            with open(timing_filename, 'wb') as f:
+                np.save(f, timing_table)
+                timing_table = np.zeros([TIMING_INTERVAL_LEN, 4])
+            
         if iteration % 20 == 0 or iteration == max_iter:
             if not enable_adascale:
                 # space fillers for logs
