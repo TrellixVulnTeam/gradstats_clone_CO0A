@@ -65,6 +65,8 @@ def do_train(
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
     enable_adascale = scale > 1.0
+    WARMUP_STEPS=1000 # ignore first 1000 iterations
+
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -109,7 +111,7 @@ def do_train(
     optimizer.zero_grad()
     step = 0 # adascale specific
     for iteration, (images, targets) in enumerate(prefetcher(iter(data_loader)), start_iter):
-        do_measure = record_time and iteration > 1000 # ignore first 1000 iterations
+        do_measure = record_time and iteration > WARMUP_STEPS         
         if per_iter_start_callback_fn is not None:
             per_iter_start_callback_fn(iteration=iteration)
 
@@ -127,7 +129,12 @@ def do_train(
             end_fwd = torch.cuda.Event(enable_timing=True)
             start_fwd.record()
         loss_dict = model(images, targets)
- 
+
+        if do_measure:
+            end_fwd.record()
+            torch.cuda.synchronize()
+            meters.update(fwd_pass=start_fwd.elapsed_time(end_fwd)/1000.0)
+
         losses = sum(loss for loss in loss_dict.values())
 
         # reduce losses over all GPUs for logging purposes
@@ -139,9 +146,6 @@ def do_train(
             meters.update(loss=losses, **loss_dict)
 
         if do_measure:
-            end_fwd.record()
-            torch.cuda.synchronize()
-            meters.update(fwd_pass=start_fwd.elapsed_time(end_fwd)/1000.0)
             start_bwd = torch.cuda.Event(enable_timing=True)
             end_bwd = torch.cuda.Event(enable_timing=True)
             start_bwd.record()
