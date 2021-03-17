@@ -15,7 +15,7 @@ from .sgdw import SGDW
 #for debugging only
 from maskrcnn_benchmark.utils.comm import get_rank
 
-def make_optimizer(cfg, model, use_adascale=False, loss_scale=1.0):
+def make_optimizer(cfg, model, use_adascale=False, enable_gns=False):
     params = []
     lr = cfg.SOLVER.BASE_LR
     weight_decay = cfg.SOLVER.WEIGHT_DECAY
@@ -67,8 +67,12 @@ def make_optimizer(cfg, model, use_adascale=False, loss_scale=1.0):
             ],
             lr, momentum=cfg.SOLVER.MOMENTUM)
 
-    if use_adascale:
-        optimizer = AdaScale(optimizer, rank=get_rank(), is_adaptive=(cfg.SOLVER.OPTIMIZER != "SGD" and cfg.SOLVER.OPTIMIZER != "SGDW"))
+    if use_adascale or enable_gns:
+        smoothing = None # auto adjust for current training scale
+        if cfg.SOLVER.GNS_SMOOTHING > 0.0:
+            smoothing = cfg.SOLVER.GNS_SMOOTHING
+            assert smoothing <= 1.0, "Smoothing should be a positive float less than 1.0"
+        optimizer = AdaScale(optimizer, rank=get_rank(), is_adaptive=(cfg.SOLVER.OPTIMIZER != "SGD" and cfg.SOLVER.OPTIMIZER != "SGDW"), smoothing=smoothing)
 
     return optimizer
 

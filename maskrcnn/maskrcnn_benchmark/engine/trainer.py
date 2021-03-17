@@ -60,10 +60,11 @@ def do_train(
     per_iter_end_callback_fn=None,
     scale=1.0,
     clip_grad_norm = 0.0,
-    clip_grad_val = 0.0
+    clip_grad_val = 0.0,
+    use_adascale = False,
+    measure_gns = False
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
-    enable_adascale = scale > 1.0
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
     logger.info("Start training")
     meters = MetricLogger(delimiter="  ")
@@ -72,9 +73,9 @@ def do_train(
     model.train()
     start_training_time = time.time()
     end = time.time()
-    if enable_adascale:
+    if use_adascale or measure_gns:
         # this wrapper has moved to make_optimizer - this has to be done before amp.initialize is called
-        # optimizer = AdaScale(optimizer, scale=scale)
+        # scales the variance stats accordingly
         optimizer.set_scale(scale)
 
     def prefetcher(load_iterator):
@@ -141,7 +142,10 @@ def do_train(
         elif clip_grad_val > 0.0:
             clip_grad_value_(amp.master_params(optimizer), clip_grad_val) # 0.5 mrcnn sgdw 
 
-        if enable_adascale:
+        if measure_gns:
+            gns = optimizer.gns(scale_one_batch_size=32) #FIXME: pass from main training loop
+
+        if use_adascale:
             gain = optimizer.scale_invariant_steps() # adascale specific
             prev_steps = math.floor(step)
             step = step + gain
@@ -167,7 +171,7 @@ def do_train(
         eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))
 
         if iteration % 20 == 0 or iteration == max_iter:
-            if not enable_adascale:
+            if not use_adascale:
                 # space fillers for logs
                 gain = 1.0
                 step = iteration
@@ -181,6 +185,7 @@ def do_train(
                         "lr: {lr:.6f}",
                         "max mem: {memory:.0f}",
                         "gain: {gain:.6f}",
+                        "gns: {gns:.6f}",
                         "scale: {scale}",
                         "effective_lr: {elr:.6f}",
                         "scale_invariant_steps: {step}"
@@ -192,6 +197,7 @@ def do_train(
                     lr=optimizer.param_groups[0]["lr"],
                     memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
                     gain=gain,
+                    gns=gns,
                     scale=scale,
                     elr=optimizer.param_groups[0]["lr"] * gain,
                     step=step

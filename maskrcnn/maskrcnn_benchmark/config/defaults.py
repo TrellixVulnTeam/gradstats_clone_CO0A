@@ -375,6 +375,10 @@ _C.SOLVER.LR_SCHEDULE = "MULTISTEP"
 _C.SOLVER.LR_SCALE = 1.0
 _C.SOLVER.BETA1 = 0.9
 _C.SOLVER.BETA2 = 0.25
+_C.SOLVER.ENABLE_ADASCALE = False
+_C.SOLVER.ENABLE_GNS = False
+_C.SOLVER.AMP_LOSS_SCALE = "dynamic"
+_C.SOLVER.GNS_SMOOTHING = 0.0
 
 # ---------------------------------------------------------------------------- #
 # Specific test options
