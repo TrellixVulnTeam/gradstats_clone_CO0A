@@ -157,14 +157,15 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
     # Initialize mixed-precision training
     is_fp16 = (cfg.DTYPE == "float16")
 
-    LOSS_SCALE='dynamic'
-    ENABLE_ADASCALE = cfg.SOLVER.LR_SCALE > 1.0
-    optimizer = make_optimizer(cfg, model, use_adascale=ENABLE_ADASCALE, loss_scale=LOSS_SCALE)
+    optimizer = make_optimizer(cfg, model,
+                               use_adascale=cfg.SOLVER.ENABLE_ADASCALE,
+                               enable_gns=cfg.SOLVER.ENABLE_GNS,
+                               )
 
     model, optimizer = amp.initialize(model, optimizer,
                                       opt_level="O1",
                                       keep_batchnorm_fp32=None,
-                                      loss_scale=LOSS_SCALE
+                                      loss_scale=cfg.SOLVER.AMP_LOSS_SCALE
                                       )
     # Optimizer logging
     log_event(key=constants.OPT_NAME, value="sgd_with_momentum")
@@ -244,7 +245,9 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         per_iter_end_callback_fn=per_iter_callback_fn,
         scale=cfg.SOLVER.LR_SCALE,
         clip_grad_norm=cfg.SOLVER.GRADIENT_CLIP_NORM,
-        clip_grad_val=cfg.SOLVER.GRADIENT_CLIP_VAL
+        clip_grad_val=cfg.SOLVER.GRADIENT_CLIP_VAL,
+        use_adascale=cfg.SOLVER.ENABLE_ADASCALE,
+        measure_gns=cfg.SOLVER.ENABLE_GNS,
     )
 
     end_train_time = time.time()

@@ -134,6 +134,7 @@ class AdaScale(Optimizer):
         self._gain_invalid = False
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
+        self._smoothing = smoothing
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
 
         if self._world_size * self._num_grads_to_accum <= 1:
@@ -339,13 +340,33 @@ class AdaScale(Optimizer):
             return 0.0
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
-        # TODO: print -> log.debug
-        # print("####", self._rank, "####", var, "@@@@", sqr)
         max_scale = self.scale
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
         gain = (var + sqr) / (var / max_scale + sqr)
         return gain
+
+
+    def gns(self, scale_one_batch_size=32, pg_idx: Optional[int] = None) -> float:
+        """
+        Computes GNS as B_simple defined in https://arxiv.org/pdf/1812.06162.pdf
+
+        AdaScale calculations already take into account computing trace(cov)/batch_size estimate and squared
+        of gradient norm.
+
+        We can estimate b_simple = grad_var * batch_size / grad_sqr
+        NOTE: that batch size used here is batch size that corresponds to scale 1.0
+        """
+        # TODO: compare numbers with original estimator in the paper
+
+        # estimate of grad var for scale S
+        var = self._grad_var_avg(pg_idx)
+        sqr = self._grad_sqr_avg(pg_idx)
+
+        # gns = scale_one_batch_size * var / sqr
+        gns = scale_one_batch_size * var / sqr
+        return gns
+
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
         if self._debias_ewma:
@@ -461,18 +482,11 @@ class AdaScale(Optimizer):
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
-        # Compute the sums of squares for reduced gradients.
-        # Divide by _num_grads_to_accum since the gradients are accumulated.
-#        total_grad_sqr_orig = np.array(
-#            [sum(param.grad.pow(2).sum().item() for param in group["params"]) for group in self._optimizer.param_groups]
-#        )
-        
-#        for group in self._optimizer.param_groups:
-#            for param in group["params"]:
-#                print(torch.isnan(param.grad))
         #TODO: assumes that optimizer is AMP wrapped and only one scaler is used
         curr_loss_scale = amp.state_dict()['loss_scaler0']['loss_scale']
 
+        # Compute the sums of squares for reduced gradients.
+        # Divide by _num_grads_to_accum since the gradients are accumulated.
         grads = []
         for pg_idx, group in enumerate(self._optimizer.param_groups):
             grads.append([])
@@ -498,11 +512,6 @@ class AdaScale(Optimizer):
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
-#        if np.isnan(local_grad_sqr) or np.isinf(local_grad_sqr):
-#            print('skipping updates')
-#            self._local_grad_sqr = None
-#            return
-
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
         #
@@ -511,10 +520,14 @@ class AdaScale(Optimizer):
         # total_grad_sqr is \norm{\bar{g}_t}^2
         S = self._scale
         cN = self._world_size * self._num_grads_to_accum
+        # AS: Adjustment is done as such
+        # S/(cN-1) * (1/cN * \sum_{i=1}^cN \norm{g_t_i}^2 - \norm{\bar{g}_t}^2)
         grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
         grad_sqr = total_grad_sqr - grad_var / S
+
         grad_var = np.maximum(grad_var, 1e-6)
         grad_sqr = np.maximum(grad_sqr, 0.0)
+
         self._gain_invalid = False
         if np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
             print('gradient inf/nan skipping update')
@@ -522,6 +535,7 @@ class AdaScale(Optimizer):
         else:
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
+
         self._last_final_backward_call = self._num_backward_calls
         # Indicating backward is done.
         self._local_grad_sqr = None
@@ -644,6 +658,7 @@ class AdaScale(Optimizer):
             #
             # When effective world size is large enough, smoothing is probably
             # not needed, so the smoothing factor is 0.
+            # TODO: smoothing function can be a callback - allows end user to change smoothing rules
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
 
 
