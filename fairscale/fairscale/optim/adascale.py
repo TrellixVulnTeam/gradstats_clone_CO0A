@@ -301,7 +301,7 @@ class AdaScale(Optimizer):
         else:
             return float(np.sum(self._state["grad_var_avg"]))
 
-    def scale_invariant_steps(self, pg_idx: Optional[int] = None) -> float:
+    def scale_invariant_steps(self, pg_idx: Optional[int] = None, aggressive_base_schedule=False) -> float:
         """
         Current estimate of the AdaScale gain ratio (r_t in the paper).
 
@@ -319,6 +319,9 @@ class AdaScale(Optimizer):
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
         gain = (var + sqr) / (var / self.scale + sqr)
+        if aggressive_base_schedule:
+            #return np.sqrt(self.scale * gain) # take larger scheduler steps to maintain the aggressive schedule
+            return np.power(self.scale * self.scale * gain, 1./3) # take larger scheduler steps to maintain the aggressive schedule
         return gain
 
 
