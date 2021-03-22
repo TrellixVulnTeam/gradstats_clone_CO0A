@@ -253,6 +253,7 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         clip_grad_val=cfg.SOLVER.GRADIENT_CLIP_VAL,
         use_adascale=cfg.SOLVER.ENABLE_ADASCALE,
         measure_gns=cfg.SOLVER.ENABLE_GNS,
+        base_warmup_steps=cfg.SOLVER.WARMUP_ITERS
     )
 
     end_train_time = time.time()

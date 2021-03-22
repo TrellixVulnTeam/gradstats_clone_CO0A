@@ -64,6 +64,7 @@ def do_train(
     clip_grad_val = 0.0,
     use_adascale = False,
     measure_gns = False,
+    base_warmup_steps = 0,
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
@@ -149,7 +150,7 @@ def do_train(
             gns = optimizer.gns(scale_one_batch_size=32) #FIXME: pass from main training loop
 
         if use_adascale:
-            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=(step-start_step) > 500) # adascale specific FIXME: hardcoded for now
+            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=(step-start_step) > base_warmup_steps) # adascale specific FIXME: hardcoded for now
             prev_steps = math.floor(step)
             step = step + gain
             new_steps = math.floor(step)
