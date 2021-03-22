@@ -379,6 +379,8 @@ _C.SOLVER.ENABLE_ADASCALE = False
 _C.SOLVER.ENABLE_GNS = False
 _C.SOLVER.AMP_LOSS_SCALE = "dynamic"
 _C.SOLVER.GNS_SMOOTHING = 0.0
+# For dynamic scaling
+_C.SOLVER.PREV_SCALE = 1.0
 
 # ---------------------------------------------------------------------------- #
 # Specific test options
@@ -410,7 +412,6 @@ _C.AMP_VERBOSE = False
 _C.NHWC = False
 # Disable reduced logging
 _C.DISABLE_REDUCED_LOGGING = False
-
 # ---------------------------------------------------------------------------- #
 # MLPerf-specific options
 # ---------------------------------------------------------------------------- #

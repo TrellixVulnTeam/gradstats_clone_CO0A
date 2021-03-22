@@ -56,13 +56,14 @@ def do_train(
     checkpoint_period,
     arguments,
     disable_allreduce_for_logging,
+    iters_per_epoch,
     per_iter_start_callback_fn=None,
     per_iter_end_callback_fn=None,
     scale=1.0,
     clip_grad_norm = 0.0,
     clip_grad_val = 0.0,
     use_adascale = False,
-    measure_gns = False
+    measure_gns = False,
 ):
     assert not (clip_grad_norm > 0.0 and clip_grad_val > 0.0), "Can't set both clip norm and clip value"
     logger = logging.getLogger("maskrcnn_benchmark.trainer")
@@ -107,7 +108,9 @@ def do_train(
 
     synchronize()
     optimizer.zero_grad()
-    step = 0 # adascale specific
+    step = scheduler.last_epoch #0 # adascale specific FIXME: scheduler.last_epoch corresponds to current step for epoch based scheduler
+    start_step = step
+    logger.info("Starting training at scale invariant step: {}".format(step))
     for iteration, (images, targets) in enumerate(prefetcher(iter(data_loader)), start_iter):
         if per_iter_start_callback_fn is not None:
             per_iter_start_callback_fn(iteration=iteration)
@@ -146,7 +149,7 @@ def do_train(
             gns = optimizer.gns(scale_one_batch_size=32) #FIXME: pass from main training loop
 
         if use_adascale:
-            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=step > 500) # adascale specific FIXME: hardcoded for now
+            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=(step-start_step) > 500) # adascale specific FIXME: hardcoded for now
             prev_steps = math.floor(step)
             step = step + gain
             new_steps = math.floor(step)
@@ -203,8 +206,12 @@ def do_train(
                     step=step
                 )
             )
-        if iteration % checkpoint_period == 0 and arguments["save_checkpoints"]:
-            checkpointer.save("model_{:07d}".format(iteration), **arguments)
+        # logger.info("I AM AT ITERATION {} STEP {} ITERS_PER_EPOCH {}".format(iteration, step, iters_per_epoch))
+        # FIXME: to be driven by config - min batch size 32, max 512
+        rounded_batch_size = int(min(512, max(32, gns // 32 * 32)))
+        if iteration > 0 and iteration % checkpoint_period == 0 and arguments["save_checkpoints"]:
+            epoch = iteration // iters_per_epoch
+            checkpointer.save("model_{:03d}_{:07d}_{:03d}".format(epoch, iteration, rounded_batch_size), **arguments)
         if step >= max_iter and arguments["save_checkpoints"]:
             checkpointer.save("model_final", **arguments)
 

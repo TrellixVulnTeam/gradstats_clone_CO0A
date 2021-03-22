@@ -71,7 +71,7 @@ class Checkpointer(object):
         self._load_model(checkpoint, nhwc)
         if "optimizer" in checkpoint and self.optimizer:
             self.logger.info("Loading optimizer from {}".format(f))
-            self.optimizer.load_state_dict(checkpoint.pop("optimizer"))
+            #AS: self.optimizer.load_state_dict(checkpoint.pop("optimizer"))
             if nhwc:
                 transpose_optimizer_state_nchw_to_nhwc(self.model, self.optimizer.state_dict())
         if "scheduler" in checkpoint and self.scheduler:
@@ -162,6 +162,9 @@ def transpose_optimizer_state_nhwc_to_nchw(model, optimizer_dict):
     for name, param in model.named_parameters():
         layer_id_to_name_map[id(param)] = name
     for k in optimizer_dict['state']:
+        # conversion not required for non-layer states like AdaScale
+        if not k in layer_id_to_name_map:
+            continue
         needs_transpose = is_layer_nhwc_eligible(layer_id_to_name_map[k])
         needs_transpose = needs_transpose and  \
                           len(optimizer_dict['state'][k]['momentum_buffer'].shape) == 4
@@ -174,6 +177,9 @@ def transpose_optimizer_state_nchw_to_nhwc(model, optimizer_dict):
     for name, param in model.named_parameters():
         layer_id_to_name_map[id(param)] = name
     for k in optimizer_dict['state']:
+        # conversion not required for non-layer states like AdaScale
+        if not k in layer_id_to_name_map:
+            continue
         needs_transpose = is_layer_nhwc_eligible(layer_id_to_name_map[k])
         needs_transpose = needs_transpose and  \
                           len(optimizer_dict['state'][k]['momentum_buffer'].shape) == 4

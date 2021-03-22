@@ -198,7 +198,11 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
     
     extra_checkpoint_data = checkpointer.load(cfg.MODEL.WEIGHT, cfg.NHWC)
     arguments.update(extra_checkpoint_data)
-    
+   
+    # for dynamic scaling simulation, adjust restored iterations to current scale 
+    arguments["iteration"] = int(arguments["iteration"] * cfg.SOLVER.PREV_SCALE / cfg.SOLVER.LR_SCALE)
+
+
     log_end(key=constants.INIT_STOP)
     barrier()
     log_start(key=constants.RUN_START)
@@ -213,7 +217,7 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
     )
     log_event(key=constants.TRAIN_SAMPLES, value=len(data_loader))
 
-    checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
+    checkpoint_period = iters_per_epoch # FIXME: cfg.SOLVER.CHECKPOINT_PERIOD
 
     # set the callback function to evaluate and potentially
     # early exit each epoch
@@ -241,6 +245,7 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         checkpoint_period,
         arguments,
         cfg.DISABLE_REDUCED_LOGGING,
+        iters_per_epoch,
         per_iter_start_callback_fn=functools.partial(mlperf_log_epoch_start, iters_per_epoch=iters_per_epoch),
         per_iter_end_callback_fn=per_iter_callback_fn,
         scale=cfg.SOLVER.LR_SCALE,
