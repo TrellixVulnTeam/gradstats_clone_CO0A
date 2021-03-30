@@ -107,7 +107,7 @@ class PolyWarmUpScheduler(LRScheduler):
     Applies a warm up period to the learning rate.
     """
 
-    def __init__(self, optimizer, warmup, total_steps, degree=0.5, last_epoch=-1):
+    def __init__(self, optimizer, warmup, total_steps, degree=0.5, last_epoch=-1, do_poly_warmup=False):
         self.warmup = warmup
         self.total_steps = total_steps
         self.degree = degree
@@ -126,6 +126,10 @@ class PolyWarmUpScheduler(LRScheduler):
     def get_lr(self):
         progress = self.last_epoch / self.total_steps
         if progress < self.warmup:
-            return [base_lr * progress / self.warmup for base_lr in self.base_lrs]
+            if do_poly_warmup:
+                return [base_lr * (progress / self.warmup) ** self.degree for base_lr in self.base_lrs]
+            else:
+                return [base_lr * progress / self.warmup for base_lr in self.base_lrs]
         else:
             return [base_lr * ((1.0 - progress) ** self.degree) for base_lr in self.base_lrs]
+

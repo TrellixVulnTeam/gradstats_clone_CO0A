@@ -39,7 +39,7 @@ import multiprocessing
 
 from tokenization import BertTokenizer
 import modeling
-from apex.optimizers import FusedLAMB
+from apex.optimizers import FusedLAMB, FusedAdam
 from schedulers import PolyWarmUpScheduler
 
 from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
@@ -171,111 +171,169 @@ def parse_arguments():
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
+
     parser.add_argument("--max_predictions_per_seq",
                         default=80,
                         type=int,
                         help="The maximum total of masked tokens in input sequence")
+
     parser.add_argument("--train_batch_size",
                         default=32,
                         type=int,
                         help="Total batch size for training.")
+
+    parser.add_argument("--use_adamw",
+                        default=False,
+                        action='store_true',
+                        help="Use AdamW as the optimizer.")
+
     parser.add_argument("--learning_rate",
                         default=5e-5,
                         type=float,
                         help="The initial learning rate for Adam.")
+
+    parser.add_argument("--adamw_beta1",
+                        default=5e-5,
+                        type=float,
+                        help="Beta1 for Adam.")
+
+    parser.add_argument("--adamw_beta2",
+                        default=5e-5,
+                        type=float,
+                        help="Beta2 for Adam.")
+
+    parser.add_argument("--adamw_weight_decay",
+                        default=5e-5,
+                        type=float,
+                        help="Decoupled weight decay for Adam.")
+
+    parser.add_argument("--adamw_eps",
+                        default=5e-5,
+                        type=float,
+                        help="Epsilon for Adam.")
+
+    parser.add_argument("--lr_poly_power",
+                        default=1,
+                        type=float,
+                        help="Polynomial power for LR scheduler.")
+
     parser.add_argument("--num_train_epochs",
                         default=3.0,
                         type=float,
                         help="Total number of training epochs to perform.")
+
     parser.add_argument("--max_steps",
                         default=1000,
                         type=float,
                         help="Total number of training steps to perform.")
+
     parser.add_argument("--warmup_proportion",
                         default=0.01,
                         type=float,
                         help="Proportion of training to perform linear learning rate warmup for. "
                              "E.g., 0.1 = 10%% of training.")
+
     parser.add_argument("--local_rank",
                         type=int,
                         default=os.getenv('LOCAL_RANK', -1),
                         help="local_rank for distributed training on gpus")
+
     parser.add_argument('--seed',
                         type=int,
                         default=42,
                         help="random seed for initialization")
+
     parser.add_argument('--gradient_accumulation_steps',
                         type=int,
                         default=1,
                         help="Number of updates steps to accumualte before performing a backward/update pass.")
+
     parser.add_argument('--fp16',
                         default=False,
                         action='store_true',
                         help="Mixed precision training")
+
     parser.add_argument('--amp',
                         default=False,
                         action='store_true',
                         help="Mixed precision training")
+
     parser.add_argument('--loss_scale',
                         type=float, default=0.0,
                         help='Loss scaling, positive power of 2 values can improve fp16 convergence.')
+
     parser.add_argument('--log_freq',
                         type=float, default=1.0,
                         help='frequency of logging loss.')
+
     parser.add_argument('--checkpoint_activations',
                         default=False,
                         action='store_true',
                         help="Whether to use gradient checkpointing")
+
     parser.add_argument("--resume_from_checkpoint",
                         default=False,
                         action='store_true',
                         help="Whether to resume training from checkpoint.")
+
     parser.add_argument('--resume_step',
                         type=int,
                         default=-1,
                         help="Step to resume training from.")
+
     parser.add_argument('--num_steps_per_checkpoint',
                         type=int,
                         default=100,
                         help="Number of update steps until a model checkpoint is saved to disk.")
+
     parser.add_argument('--skip_checkpoint',
                         default=False,
                         action='store_true',
                         help="Whether to save checkpoints")
+
     parser.add_argument('--phase2',
                         default=False,
                         action='store_true',
                         help="Whether to train with seq len 512")
+
     parser.add_argument('--allreduce_post_accumulation',
                         default=False,
                         action='store_true',
                         help="Whether to do allreduces during gradient accumulation steps.")
+
     parser.add_argument('--allreduce_post_accumulation_fp16',
                         default=False,
                         action='store_true',
                         help="Whether to do fp16 allreduce post accumulation.")
+
     parser.add_argument('--phase1_end_step',
                         type=int,
                         default=7038,
                         help="Number of training steps in Phase1 - seq len 128")
+
     parser.add_argument('--init_loss_scale',
                         type=int,
                         default=2**20,
                         help="Initial loss scaler value")
+
     parser.add_argument("--do_train",
                         default=False,
                         action='store_true',
                         help="Whether to run training.")
+
     parser.add_argument('--json-summary', type=str, default="results/dllogger.json",
                         help='If provided, the json summary will be written to'
                              'the specified file.')
+
     parser.add_argument("--use_env",
                         action='store_true',
                         help="Whether to read local rank from ENVVAR")
+
     parser.add_argument('--disable_progress_bar',
                         default=False,
                         action='store_true',
                         help='Disable tqdm progress bar')
+
     parser.add_argument('--steps_this_run', type=int, default=-1,
                         help='If provided, only run this many steps before exiting')
 
@@ -376,17 +434,29 @@ def prepare_model_and_optimizer(args, device):
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'gamma', 'beta', 'LayerNorm']
     
-    optimizer_grouped_parameters = [
-        {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
-        {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
+    if args.use_adamw:
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': args.adamw_weight_decay},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
+        optimizer = FusedAdam(optimizer_grouped_parameters,
+                              lr=args.learning_rate,
+                              betas=(args.adamw_beta1, args.adamw_beta2),
+                              eps=args.adamw_eps,
+                              adam_w_mode=True)
+    else:
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)], 'weight_decay': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}]
 
-    optimizer = FusedLAMB(optimizer_grouped_parameters, 
-                          lr=args.learning_rate)
+        optimizer = FusedLAMB(optimizer_grouped_parameters, 
+                              lr=args.learning_rate)
+
     lr_scheduler = PolyWarmUpScheduler(optimizer, 
                                        warmup=args.warmup_proportion, 
-                                       total_steps=args.max_steps)
+                                       total_steps=args.max_steps,
+                                       degree=args.lr_poly_power if args.use_adam else 0.5,
+                                       do_poly_warmup=True if args.use_adam else False)
     if args.fp16:
-
         if args.loss_scale == 0:
             model, optimizer = amp.initialize(model, optimizer, opt_level="O2", loss_scale="dynamic", cast_model_outputs=torch.float16)
         else:
