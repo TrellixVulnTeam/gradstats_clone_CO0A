@@ -454,8 +454,8 @@ def prepare_model_and_optimizer(args, device):
     lr_scheduler = PolyWarmUpScheduler(optimizer, 
                                        warmup=args.warmup_proportion, 
                                        total_steps=args.max_steps,
-                                       degree=args.lr_poly_power if args.use_adam else 0.5,
-                                       do_poly_warmup=True if args.use_adam else False)
+                                       degree=args.lr_poly_power if args.use_adamw else 0.5,
+                                       do_poly_warmup=True if args.use_adamw else False)
     if args.fp16:
         if args.loss_scale == 0:
             model, optimizer = amp.initialize(model, optimizer, opt_level="O2", loss_scale="dynamic", cast_model_outputs=torch.float16)
