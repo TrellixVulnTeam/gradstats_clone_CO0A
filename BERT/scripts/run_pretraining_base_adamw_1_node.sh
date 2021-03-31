@@ -17,36 +17,34 @@
 # conda env 
 source /shared/conda/bin/activate /shared/conda/envs/adascale_bert/
 
-train_batch_size=${1:-2048}
+train_batch_size=${1:-8192}
 learning_rate=${2:-"1.3653e-3"}
 adamw_beta1=0.952378
 adamw_beta2=0.86471
 adamw_weight_decay=0.19891
-adamw_eps="1.0e-11"
+adamw_eps="1e-11"
 lr_poly_power=2
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
 warmup_proportion=${5:-"0.2843"}
 train_steps=${6:-7038}
-save_checkpoint_steps=${7:-8000}
+save_checkpoint_steps=${7:-1000}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-128}
+gradient_accumulation_steps=${11:-512}
 seed=${12:-12439}
 job_name=${13:-"bert_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"true"}
 allreduce_post_accumulation_fp16=${15:-"true"}
-train_batch_size_phase2=${16:-1024}
+train_batch_size_phase2=${16:-4096}
 learning_rate_phase2=${17:-"6.1951e-5"}
 adamw_phase2_beta1=0.65322
 adamw_phase2_beta2=0.82451
 adamw_phase2_weight_decay=0.19891
-#warmup_proportion_phase2=${18:-"0.5"}
-warmup_proportion_phase2=${18:-"0.25"}
-#train_steps_phase2=${19:-781}
-train_steps_phase2=${19:-1563}
-gradient_accumulation_steps_phase2=${20:-256}
+warmup_proportion_phase2=${18:-"0.5"}
+train_steps_phase2=${19:-781}
+gradient_accumulation_steps_phase2=${20:-1024}
 DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
 DATA_DIR_PHASE1=/shared/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
 BERT_CONFIG=/shared/scaling_without_tuning/BERT/bert_base_config.json
@@ -54,7 +52,7 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=/shared/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/shared/scaling_without_tuning/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_4node
+RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_1node
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
  
 mkdir -p $CHECKPOINTS_DIR
@@ -170,18 +168,18 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
-# if [ -z "$LOGFILE" ] ; then
-#    $CMD
-# else
-#    (
-#      $CMD
-#    ) |& tee $LOGFILE
-# fi
-# 
-# set +x
-# 
-# echo "finished pretraining"
-# 
+if [ -z "$LOGFILE" ] ; then
+   $CMD
+else
+   (
+     $CMD
+   ) |& tee $LOGFILE
+fi
+
+set +x
+
+echo "finished pretraining"
+
 #Start Phase2
 
 precision="fp16"
