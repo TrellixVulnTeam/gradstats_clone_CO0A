@@ -35,8 +35,10 @@ accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-128}
 seed=${12:-12439}
 job_name=${13:-"bert_adamw_pretraining"}
-allreduce_post_accumulation=${14:-"true"}
-allreduce_post_accumulation_fp16=${15:-"true"}
+#allreduce_post_accumulation=${14:-"true"}
+allreduce_post_accumulation=${14:-"false"}
+#allreduce_post_accumulation_fp16=${15:-"true"}
+allreduce_post_accumulation_fp16=${15:-"false"}
 train_batch_size_phase2=${16:-1024}
 learning_rate_phase2=${17:-"6.1951e-5"}
 adamw_phase2_beta1=0.65322
@@ -54,7 +56,7 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=/shared/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/shared/scaling_without_tuning/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_4node
+RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_4node_gns
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
  
 mkdir -p $CHECKPOINTS_DIR
@@ -136,6 +138,7 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
+CMD+=" --enable_gns"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -170,18 +173,18 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
-# if [ -z "$LOGFILE" ] ; then
-#    $CMD
-# else
-#    (
-#      $CMD
-#    ) |& tee $LOGFILE
-# fi
-# 
-# set +x
-# 
-# echo "finished pretraining"
-# 
+if [ -z "$LOGFILE" ] ; then
+   $CMD
+else
+   (
+     $CMD
+   ) |& tee $LOGFILE
+fi
+
+set +x
+
+echo "finished pretraining"
+
 #Start Phase2
 
 precision="fp16"
@@ -235,6 +238,7 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
+CMD+=" --enable_gns"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"

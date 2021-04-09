@@ -42,8 +42,8 @@ learning_rate_phase2=${17:-"6.1951e-5"}
 adamw_phase2_beta1=0.65322
 adamw_phase2_beta2=0.82451
 adamw_phase2_weight_decay=0.19891
-warmup_proportion_phase2=${18:-"0.5"}
-train_steps_phase2=${19:-781}
+warmup_proportion_phase2=${18:-"0.25"}
+train_steps_phase2=${19:-1563}
 gradient_accumulation_steps_phase2=${20:-1024}
 DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
 DATA_DIR_PHASE1=/shared/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
@@ -52,7 +52,7 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=/shared/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/shared/scaling_without_tuning/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_1node
+RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_1node_gns
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
  
 mkdir -p $CHECKPOINTS_DIR
@@ -134,6 +134,7 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
+CMD+=" --enable_gns"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -233,6 +234,7 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
+CMD+=" --enable_gns"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
