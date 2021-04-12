@@ -119,7 +119,8 @@ class AdaScale(Optimizer):
         num_gradients_to_accumulate: int = 1,
         debias_ewma: bool = True,
         rank: int = 1,
-        is_adaptive:bool = False
+        is_adaptive:bool = False,
+        scaler = None
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -166,6 +167,7 @@ class AdaScale(Optimizer):
 
         self._hook_handles: List[Any] = []
         self._hook()
+        self._scaler = scaler
         # Adding for O2 level of AMP
         self.state = self._optimizer.state
 
@@ -354,7 +356,7 @@ class AdaScale(Optimizer):
         return gain
 
 
-    def gns(self, scale_one_batch_size=32, pg_idx: Optional[int] = None, eps=1e-8) -> float:
+    def gns(self, scale_one_batch_size=32, pg_idx: Optional[int] = None) -> float:
         """
         Computes GNS as B_simple defined in https://arxiv.org/pdf/1812.06162.pdf
 
@@ -370,7 +372,7 @@ class AdaScale(Optimizer):
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
-        gns = scale_one_batch_size * var / (sqr + eps)
+        gns = scale_one_batch_size * var / sqr
         return gns
 
 
@@ -410,7 +412,11 @@ class AdaScale(Optimizer):
             else:
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
-    def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
+    def _current_loss_scale(self):
+        return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
+
+
+    def _backward_hook_new(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
         # AS: reasoning here is as follows: every accumulation step is adding to previous gradient
@@ -420,6 +426,7 @@ class AdaScale(Optimizer):
         # so now we have num gpu copies of gradients to estimate stats
         grads_are_invalid = False
         if torch.sum(torch.isnan(grad)) or torch.sum(torch.isinf(grad)):
+            print("Gradients are invalid, current scale:", self._scaler.get_scale())
             grads_are_invalid = True
 
         # Store the local gradient square sums in a vector.
@@ -435,8 +442,7 @@ class AdaScale(Optimizer):
         if self._num_backward_calls >= self._num_grads_to_accum - 1:
             # unscale grads before computing squares - else numbers blow up with scale
             grad_clone = grad.detach().clone()
-            #TODO: assumes that optimizer is Apex AMP wrapped and only one scaler is used
-            curr_loss_scale = amp.state_dict()['loss_scaler0']['loss_scale']
+            curr_loss_scale = self._current_loss_scale() 
             grad_clone.div_(curr_loss_scale)
             if not grads_are_invalid:
                 # Get the preconditioning matrix for the optimizer
@@ -449,7 +455,7 @@ class AdaScale(Optimizer):
         Variable._execution_engine.queue_callback(self._queue_callback)
 
 
-    def _backward_hook_i_think_this_is_wrong_for_accumulation(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
+    def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
 
@@ -468,8 +474,7 @@ class AdaScale(Optimizer):
         # we want accum copies of local_grad_sqr per worker 
         # unscale grads before computing squares - else numbers blow up with scale
         grad_clone = grad.detach().clone()
-        #FIXME: assumes that optimizer is Apex AMP wrapped and only one scaler is used - make it into its own helper
-        curr_loss_scale = amp.state_dict()['loss_scaler0']['loss_scale']
+        curr_loss_scale = self._current_loss_scale() 
         grad_clone.div_(curr_loss_scale)
         if not grads_are_invalid:
             # Get the preconditioning matrix for the optimizer
@@ -522,8 +527,7 @@ class AdaScale(Optimizer):
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
-        #TODO: assumes that optimizer is AMP wrapped and only one scaler is used
-        curr_loss_scale = amp.state_dict()['loss_scaler0']['loss_scale']
+        curr_loss_scale = self._current_loss_scale() 
 
         # Compute the sums of squares for reduced gradients.
         # Divide by _num_grads_to_accum since the gradients are accumulated.
@@ -541,6 +545,7 @@ class AdaScale(Optimizer):
                 grads[-1].append(sq_val)
         total_grad_sqr = np.array([sum(gg) for gg in grads]) # number of entries same as groups
 
+# FIXME: write better
 # AS: THIS DIV BY NUM ACCUM IS ALREADY TAKEN CARE OF IN BERT MAIN LOOP - DOUBLE CHECK!
 #        # Divide by (_num_grads_to_accum ** 2) to account for gradient
 #        # accumulation.
@@ -553,6 +558,9 @@ class AdaScale(Optimizer):
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
+        if self._rank == 0:
+            print("local", self._local_grad_sqr, "total:", total_grad_sqr, "loss_scale:", curr_loss_scale)
+
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
         #
@@ -560,17 +568,18 @@ class AdaScale(Optimizer):
         # where N is world size and c is num_grads_to_accum
         # total_grad_sqr is \norm{\bar{g}_t}^2
         S = self._scale
-        # AS: accum taken care of during loss calc - here we have 32 copies of local_sqr and but total_sqr is square of average of 128 * 32 batches
+        # AS: accum taken care of during loss calc - here we have `num workers` copies of local_sqr and 
+        # but total_sqr is square of average of `accum steps` * `num workers` batches
         # cN = self._world_size * self._num_grads_to_accum
         cN = self._world_size
         # AS: Adjustment is done as such
         # S/(cN-1) * (1/cN * \sum_{i=1}^cN \norm{g_t_i}^2 - \norm{\bar{g}_t}^2)
         # grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
         grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr / (self._world_size * self._num_grads_to_accum - 1)
-        # grad_sqr = total_grad_sqr - grad_var / S
-        grad_sqr = total_grad_sqr - grad_var / self._world_size
+        grad_sqr = total_grad_sqr - grad_var / S
+        # grad_sqr = total_grad_sqr - grad_var / self._world_size
         if self._rank == 0:
-            print("grad_var:", grad_var, "grad_sqr:", grad_sqr, "local_grad_sqr:", local_grad_sqr, "total_grad_sqr:", total_grad_sqr)
+            print("grad_var:", grad_var, "grad_sqr:", grad_sqr)
         grad_var = np.maximum(grad_var, 1e-11)
         grad_sqr = np.maximum(grad_sqr, 0.0)
 
@@ -617,7 +626,10 @@ class AdaScale(Optimizer):
             param_group["lr"] = self.gain(pg_idx=pg_idx) * param_group["lr"]
 
         # Step it.
-        res = self._optimizer.step(*args, **kwargs)
+        if self._scaler:
+            res = self._scaler.step(self._optimizer) #.step(*args, **kwargs)
+        else:
+            self._optimizer.step(*args, **kwargs)
         # Restore the original LR.
         for lr, param_group in zip(original_lr, self._optimizer.param_groups):
             param_group["lr"] = lr

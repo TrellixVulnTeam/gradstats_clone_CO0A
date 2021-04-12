@@ -44,13 +44,8 @@ from schedulers import PolyWarmUpScheduler
 
 from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from utils import is_main_process, format_step, get_world_size, get_rank
-# from apex.parallel import DistributedDataParallel as DDP
 from torch.nn.parallel import DistributedDataParallel as DDP
 from schedulers import LinearWarmUpScheduler
-from apex.parallel.distributed import flat_dist_call
-import amp_C
-import apex_C
-from apex.amp import _amp_state
 
 from fairscale.optim import AdaScale
 
@@ -477,11 +472,18 @@ def prepare_model_and_optimizer(args, device):
         optimizer = FusedLAMB(optimizer_grouped_parameters, 
                               lr=args.learning_rate)
 
+    scaler = torch.cuda.amp.GradScaler(enabled=args.fp16)
+
     if args.use_adascale or args.enable_gns:
         smoothing = None
         if args.gns_smoothing > 0.0:
             smoothing = args.gns_smoothing
-        optimizer = AdaScale(optimizer, num_gradients_to_accumulate=args.gradient_accumulation_steps, rank=get_rank(), is_adaptive=(type(optimizer) is FusedLAMB or type(optimizer) is FusedAdam), smoothing=smoothing)
+        optimizer = AdaScale(optimizer, 
+                             num_gradients_to_accumulate=args.gradient_accumulation_steps,
+                             rank=get_rank(),
+                             is_adaptive=(type(optimizer) is FusedLAMB or type(optimizer) is FusedAdam),
+                             smoothing=smoothing,
+                             scaler=scaler)
         optimizer.set_scale(args.lr_scale)
  
     lr_scheduler = PolyWarmUpScheduler(optimizer, 
@@ -489,12 +491,6 @@ def prepare_model_and_optimizer(args, device):
                                        total_steps=args.max_steps,
                                        degree=args.lr_poly_power if args.use_adamw else 0.5,
                                        do_poly_warmup=True if args.use_adamw else False)
-    if args.fp16:
-        if args.loss_scale == 0:
-            model, optimizer = amp.initialize(model, optimizer, opt_level="O2", loss_scale="dynamic", cast_model_outputs=torch.float16)
-        else:
-            model, optimizer = amp.initialize(model, optimizer, opt_level="O2", loss_scale=args.loss_scale, cast_model_outputs=torch.float16)
-        amp._amp_state.loss_scalers[0]._loss_scale = args.init_loss_scale
 
     model.checkpoint_activations(args.checkpoint_activations)
 
@@ -513,11 +509,8 @@ def prepare_model_and_optimizer(args, device):
 
         # Restore AMP master parameters          
         if args.fp16:
-            optimizer._lazy_init_maybe_master_weights()
-            optimizer._amp_stash.lazy_init_called = True
+            scaler.load_state_dict(checkpoint['scaler'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            for param, saved_param in zip(amp.master_params(optimizer), checkpoint['master params']):
-                param.data.copy_(saved_param.data)
 
     if args.local_rank != -1:
         if not args.allreduce_post_accumulation:
@@ -530,12 +523,14 @@ def prepare_model_and_optimizer(args, device):
 
     criterion = BertPretrainingCriterion(config.vocab_size)
 
-    return model, optimizer, lr_scheduler, checkpoint, global_step, criterion
+    return model, optimizer, lr_scheduler, checkpoint, global_step, criterion, scaler
 
-def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
+def take_optimizer_step(args, scaler, optimizer, model, overflow_buf, global_step):
 
     global skipped_steps
     if args.allreduce_post_accumulation:
+        # not supporting Apex for PT >= 1.6.0
+        raise NotImplementedError
         # manually allreduce gradients after all accumulation steps
         # check for Inf/NaN
         
@@ -599,7 +594,12 @@ def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
         for param in model.parameters():
             param.grad = None
     else:
-        optimizer.step()
+        if args.enable_gns or args.use_adascale:
+            optimizer.step() # optimizer is adascale wrapped and we pass scaler as an argument to get loss scale
+        else:
+            scaler.step(optimizer)
+        # update scaler state machine
+        scaler.update()
         #optimizer.zero_grad()
         for param in model.parameters():
             param.grad = None
@@ -622,7 +622,7 @@ def main():
     dllogger.log(step="PARAMETER", data={"Config": [str(args)]})
 
     # Prepare optimizer
-    model, optimizer, lr_scheduler, checkpoint, global_step, criterion = prepare_model_and_optimizer(args, device)
+    model, optimizer, lr_scheduler, checkpoint, global_step, criterion, scaler = prepare_model_and_optimizer(args, device)
 
     if is_main_process():
         dllogger.log(step="PARAMETER", data={"SEED": args.seed})
@@ -691,7 +691,6 @@ def main():
                 overflow_buf = torch.cuda.IntTensor([0])
 
             for f_id in range(f_start_id + 1 , len(files)):
-                
    
                 if get_world_size() > num_files:
                     data_file = files[(f_id*get_world_size()+get_rank() + remainder*f_id)%num_files]
@@ -712,15 +711,16 @@ def main():
                     is_last_accumulation_step = training_steps % args.gradient_accumulation_steps == 0
                     batch = [t.to(device) for t in batch]
                     input_ids, segment_ids, input_mask, masked_lm_labels, next_sentence_labels = batch
-                    if not is_last_accumulation_step:
-                        with model.no_sync():
+                    with torch.cuda.amp.autocast(enabled=args.fp16):
+                        if not is_last_accumulation_step:
+                            with model.no_sync():
+                                prediction_scores, seq_relationship_score = model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
+                                loss = criterion(prediction_scores, seq_relationship_score, masked_lm_labels, next_sentence_labels) # graph gets created here
+                        else:
                             prediction_scores, seq_relationship_score = model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
                             loss = criterion(prediction_scores, seq_relationship_score, masked_lm_labels, next_sentence_labels) # graph gets created here
-                    else:
-                        prediction_scores, seq_relationship_score = model(input_ids=input_ids, token_type_ids=segment_ids, attention_mask=input_mask)
-                        loss = criterion(prediction_scores, seq_relationship_score, masked_lm_labels, next_sentence_labels) # graph gets created here
-                    if args.n_gpu > 1:
-                        loss = loss.mean()  # mean() to average on multi-gpu.
+                        if args.n_gpu > 1:
+                            loss = loss.mean()  # mean() to average on multi-gpu.
 
                     divisor = args.gradient_accumulation_steps
                     if accumulate_gradients:
@@ -728,19 +728,14 @@ def main():
                             # this division was merged into predivision
                             loss = loss / args.gradient_accumulation_steps
                             divisor = 1.0
-                    if args.fp16:
-                        with amp.scale_loss(loss, optimizer, delay_overflow_check=args.allreduce_post_accumulation) as scaled_loss:
-                            # AdaScale hook gets called here for backward - also graph will get cleared here so 
-                            # this is loss for 1 batch and we do this grad accumulation times before 
-                            # stepping the optimizer
-                            if accumulate_gradients and not is_last_accumulation_step:
-                                with model.no_sync(): # for this to work correctly ensure that loss calc is in similar context
-                                    scaled_loss.backward()
-                            else:
-                                scaled_loss.backward()
-
+                    # AdaScale hook gets called here for backward - also graph will get cleared here so
+                    # this is loss for 1 batch and we do this grad accumulation times before
+                    # stepping the optimizer
+                    if accumulate_gradients and not is_last_accumulation_step:
+                        with model.no_sync(): # for this to work correctly ensure that loss calc is in similar context
+                            scaler.scale(loss).backward()
                     else:
-                        loss.backward()
+                        scaler.scale(loss).backward()
                     average_loss += loss.item()
 
                     # take one optimizer step for gradient accumulation steps
@@ -759,7 +754,7 @@ def main():
                                 lr_scheduler.step() # step based scheduler    
                         else:
                             lr_scheduler.step()  # learning rate warmup
-                        global_step = take_optimizer_step(args, optimizer, model, overflow_buf, global_step)
+                        global_step = take_optimizer_step(args, scaler, optimizer, model, overflow_buf, global_step)
 
                     if global_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
@@ -803,7 +798,7 @@ def main():
                             if args.do_train:
                                 torch.save({'model': model_to_save.state_dict(),
                                             'optimizer': optimizer.state_dict(),
-                                            'master params': list(amp.master_params(optimizer)),
+                                            'scaler': scaler.state_dict(),
                                             'files': [f_id] + files,
                                             'epoch': epoch,
                                             'data_loader': None if global_step >= args.max_steps else train_dataloader}, output_save_file)
