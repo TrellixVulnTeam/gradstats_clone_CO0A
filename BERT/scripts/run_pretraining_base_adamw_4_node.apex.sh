@@ -56,7 +56,7 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=/shared/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/shared/scaling_without_tuning/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_4node_gns
+RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_4node_gns_O1
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
  
 mkdir -p $CHECKPOINTS_DIR

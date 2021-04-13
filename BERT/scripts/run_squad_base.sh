@@ -16,8 +16,9 @@
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 
 source /shared/conda/bin/activate /shared/conda/envs/adascale_bert/
-code_dir="/shared/DeepLearningExamples/PyTorch/LanguageModeling/BERT"
-init_checkpoint=${1:-"$code_dir/results/pretrain_base_4/checkpoints/ckpt_8601.pt"} 
+code_dir="/shared/scaling_without_tuning/BERT"
+#init_checkpoint=${1:-"$code_dir/results/pretrain_base_4/checkpoints/ckpt_8601.pt"} 
+init_checkpoint=${1:-"$code_dir/results/pretrain_base_adamw_4node/checkpoints/ckpt_8601.pt"} 
 # checkpoints/ckpt_7038.pt"}
 epochs=${2:-"2.0"}
 batch_size=${3:-"4"}
@@ -27,10 +28,10 @@ num_gpu=${6:-"8"}
 seed=${7:-"1"}
 squad_dir=${8:-"/shared/data/nlp/SQUAD/download/squad/v1.1"}
 vocab_file=${9:-"/shared/data/nlp/SQUAD/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
-OUT_DIR=${10:-"/shared/DeepLearningExamples/PyTorch/LanguageModeling/BERT/results/SQuAD"}
+OUT_DIR=${10:-"/shared/scaling_without_tuning/BERT/results/SQuAD_adamw"}
 mode=${11:-"train eval"}
-CONFIG_FILE=${12:-"/shared/DeepLearningExamples/PyTorch/LanguageModeling/BERT/bert_base_config.json"}
-max_steps=${13:-"-1"} 
+CONFIG_FILE=${12:-"/shared/scaling_without_tuning/BERT/bert_base_config.json"}
+max_steps=${13:-"-1"}
 
 echo "out dir is $OUT_DIR"
 mkdir -p $OUT_DIR
@@ -53,7 +54,7 @@ else
   mpi_command=" -m torch.distributed.launch --nproc_per_node=$num_gpu"
 fi
 
-CMD="/shared/conda/envs/adascale_bert/bin/python3  $mpi_command /shared/DeepLearningExamples/PyTorch/LanguageModeling/BERT/run_squad.py "
+CMD="/shared/conda/envs/adascale_bert/bin/python3  $mpi_command /shared/scaling_without_tuning/BERT/run_squad.py "
 CMD+="--init_checkpoint=$init_checkpoint "
 if [ "$mode" = "train" ] ; then
   CMD+="--do_train "
