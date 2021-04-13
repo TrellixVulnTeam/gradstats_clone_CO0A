@@ -120,7 +120,8 @@ class AdaScale(Optimizer):
         debias_ewma: bool = True,
         rank: int = 1,
         is_adaptive:bool = False,
-        scaler = None
+        scaler = None,
+        adjust_grads_for_accumulation = False
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -138,6 +139,7 @@ class AdaScale(Optimizer):
         self.param_groups = self._optimizer.param_groups
         self._smoothing = smoothing
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
+        self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -545,13 +547,12 @@ class AdaScale(Optimizer):
                 grads[-1].append(sq_val)
         total_grad_sqr = np.array([sum(gg) for gg in grads]) # number of entries same as groups
 
-# FIXME: write better
-# AS: THIS DIV BY NUM ACCUM IS ALREADY TAKEN CARE OF IN BERT MAIN LOOP - DOUBLE CHECK!
-#        # Divide by (_num_grads_to_accum ** 2) to account for gradient
-#        # accumulation.
-#        if self._num_grads_to_accum > 1:
-#            # np array doesn't support /=.
-#            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
+        # Divide by (_num_grads_to_accum ** 2) to account for gradient
+        # accumulation. Note that sometimes this factor is already taken care of in
+        # loss calculation, so we do not need to adjust for accumulation divisor
+        if self._num_grads_to_accum > 1 and self._adjust_grads_for_accumulation:
+            # np array doesn't support /=.
+            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
 
         # Wait for all_reduce to be done and move it to cpu & np.
         if work:
@@ -567,15 +568,22 @@ class AdaScale(Optimizer):
         # local_grad_sqr is \sum_{i=1}^{c N} \norm{g_t_i}^2
         # where N is world size and c is num_grads_to_accum
         # total_grad_sqr is \norm{\bar{g}_t}^2
+        
+        ########################
+        # adjusting stats for original formula
+        if not self._adjust_grads_for_accumulation:
+            local_grad_sqr = self._num_grads_to_accum * self._num_grads_to_accum * local_grad_sqr
+        ########################
+
         S = self._scale
         # AS: accum taken care of during loss calc - here we have `num workers` copies of local_sqr and 
         # but total_sqr is square of average of `accum steps` * `num workers` batches
-        # cN = self._world_size * self._num_grads_to_accum
-        cN = self._world_size
+        cN = self._world_size * self._num_grads_to_accum
+        # cN = self._world_size
         # AS: Adjustment is done as such
         # S/(cN-1) * (1/cN * \sum_{i=1}^cN \norm{g_t_i}^2 - \norm{\bar{g}_t}^2)
-        # grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
-        grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr / (self._world_size * self._num_grads_to_accum - 1)
+        grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
+        # grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr / (self._world_size * self._num_grads_to_accum - 1)
         grad_sqr = total_grad_sqr - grad_var / S
         # grad_sqr = total_grad_sqr - grad_var / self._world_size
         if self._rank == 0:
@@ -595,6 +603,7 @@ class AdaScale(Optimizer):
         self._last_final_backward_call = self._num_backward_calls = 0
         # Indicating backward is done.
         self._local_grad_sqr = None
+
 
     def step(self, *args: Any, **kwargs: Any) -> Optional[float]:
         """
@@ -636,6 +645,7 @@ class AdaScale(Optimizer):
         # FIXME: AMP O2 seems to create a copy of param group dicts, so the proxy setup in c-tor breaks, force resync here so that scheduler works properly
         self.param_groups = self._optimizer.param_groups
         return res
+
 
     def add_param_group(self, pg: Dict) -> None:
         """ Support adding parameter groups
