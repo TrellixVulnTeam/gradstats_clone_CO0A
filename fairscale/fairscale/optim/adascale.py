@@ -121,7 +121,8 @@ class AdaScale(Optimizer):
         rank: int = 1,
         is_adaptive:bool = False,
         scaler = None,
-        adjust_grads_for_accumulation = False
+        adjust_grads_for_accumulation = False,
+        use_preconditioner = False
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -140,6 +141,7 @@ class AdaScale(Optimizer):
         self._smoothing = smoothing
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
         self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
+        self._use_preconditioner = use_preconditioner
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -157,10 +159,10 @@ class AdaScale(Optimizer):
         self._scale = 1.0  # Assign to inform mypy about the typing of this variable.
         self.set_scale(self._world_size * self._num_grads_to_accum if scale is None else scale)
 
-        # FIXME: write more generic
+        # FIXME: write more generic - MAYBE THIS IS NOT NEEDED
         if self._is_adaptive:
             self._opt_param_group = {'beta1': [], 'beta2': [], 'eps': []}
-
+        self._inner_opt_step = 1
         for pg_idx, param_group in enumerate(self._optimizer.param_groups):
             if self._is_adaptive:
                 self._opt_param_group['beta1'].append(param_group['betas'][0])
@@ -418,45 +420,6 @@ class AdaScale(Optimizer):
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
 
 
-    def _backward_hook_new(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
-        # This method should be invoked once for each parameter during the
-        # backward pass, before gradients are synchronized between world_size.
-        # AS: reasoning here is as follows: every accumulation step is adding to previous gradient
-        # so local gradient square is squaring accumulated values, which is not same as
-        # squaring gradients for each batch - so we make a compromise here and consider
-        # each squaring operation to be done once all gradients have been accumulated
-        # so now we have num gpu copies of gradients to estimate stats
-        grads_are_invalid = False
-        if torch.sum(torch.isnan(grad)) or torch.sum(torch.isinf(grad)):
-            print("Gradients are invalid, current scale:", self._scaler.get_scale())
-            grads_are_invalid = True
-
-        # Store the local gradient square sums in a vector.
-        # This vector is also used for error checking. Whenever it is not None,
-        # it means that we are in backward pass.
-        if self._local_grad_sqr is None:
-            self._local_grad_sqr = torch.zeros(
-                len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
-            )
-
-        # after gradients have been accumulated, calculate local grad square
-
-        if self._num_backward_calls >= self._num_grads_to_accum - 1:
-            # unscale grads before computing squares - else numbers blow up with scale
-            grad_clone = grad.detach().clone()
-            curr_loss_scale = self._current_loss_scale() 
-            grad_clone.div_(curr_loss_scale)
-            if not grads_are_invalid:
-                # Get the preconditioning matrix for the optimizer
-                preconditioner = self._calculate_preconditioner(pg_idx, param)
-                self._local_grad_sqr[pg_idx] += grad_clone.div_(preconditioner).pow(2).sum()
-        # Now, ensure we queue a callback at the end of the callback queue.
-        # This will fire after all gradient callbacks are done (esp. those
-        # queued by DDP.
-        self._final_callback_queued = False
-        Variable._execution_engine.queue_callback(self._queue_callback)
-
-
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
@@ -468,10 +431,12 @@ class AdaScale(Optimizer):
         # Store the local gradient square sums in a vector.
         # This vector is also used for error checking. Whenever it is not None,
         # it means that we are in backward pass.
+        debug = False
         if self._local_grad_sqr is None:
             self._local_grad_sqr = torch.zeros(
                 len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
             )
+            debug = True
 
         # we want accum copies of local_grad_sqr per worker 
         # unscale grads before computing squares - else numbers blow up with scale
@@ -482,6 +447,12 @@ class AdaScale(Optimizer):
             # Get the preconditioning matrix for the optimizer
             preconditioner = self._calculate_preconditioner(pg_idx, param)
             self._local_grad_sqr[pg_idx] += grad_clone.div_(preconditioner).pow(2).sum()
+
+            # if self._rank == 0 and debug:
+            #     #print("grad_clone", grad_clone)
+            #     print("<<<<<<<<<<<<<<<", self._local_grad_sqr[pg_idx], ">>>>>>>>>>>>>>>")
+            #     debug = False
+
         # Now, ensure we queue a callback at the end of the callback queue.
         # This will fire after all gradient callbacks are done (esp. those
         # queued by DDP.
@@ -537,7 +508,7 @@ class AdaScale(Optimizer):
         for pg_idx, param_group in enumerate(self._optimizer.param_groups):
             grads.append([])
             for param in param_group["params"]:
-                preconditioner = self._calculate_preconditioner(pg_idx, param)
+                preconditioner = self._calculate_preconditioner(pg_idx, param, where="total")
                 if param.grad is None:
                     grads[-1].append(0.0)
                     continue
@@ -586,8 +557,8 @@ class AdaScale(Optimizer):
         # grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr / (self._world_size * self._num_grads_to_accum - 1)
         grad_sqr = total_grad_sqr - grad_var / S
         # grad_sqr = total_grad_sqr - grad_var / self._world_size
-        if self._rank == 0:
-            print("grad_var:", grad_var, "grad_sqr:", grad_sqr)
+        # if self._rank == 0:
+        #     print("grad_var:", grad_var, "grad_sqr:", grad_sqr)
         grad_var = np.maximum(grad_var, 1e-11)
         grad_sqr = np.maximum(grad_sqr, 0.0)
 
@@ -669,6 +640,7 @@ class AdaScale(Optimizer):
             self._state[name] = np.append(self._state[name], val)
             assert self._state[name].shape == (len(self._optimizer.param_groups),)
 
+
     def zero_grad(self) -> None:
         """Proxy function to optimizer, because some training loops need this."""
         assert self._local_grad_sqr is None, "Don't zero_grad in backward"
@@ -685,6 +657,7 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't checkpoint in backward"
         return self._optimizer.state_dict()
 
+
     def load_state_dict(self, data: Dict) -> None:
         """ Proxy function to optimizer, checkpointing needs this.
 
@@ -695,6 +668,7 @@ class AdaScale(Optimizer):
         """
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         return self._optimizer.load_state_dict(data)
+
 
     def set_num_gradients_to_accumulate(self, num_gradients_to_accumulate: int, update_smoothing: bool = True,) -> None:
         """Set the number of gradients to accumulate to a new value.
@@ -731,15 +705,27 @@ class AdaScale(Optimizer):
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
 
 
-    def _calculate_preconditioner(self, pg_idx, param):
-        return torch.ones_like(param, memory_format=torch.preserve_format)
-#        if not self._is_adaptive or param not in self._optimizer.state:
-#            return torch.ones_like(param, memory_format=torch.preserve_format)
-#
-#        state = self._optimizer.state[param]
-#        # print(self._optimizer.state_dict()['state'].keys())
-#        exp_avg_sq = state["exp_avg_sq"]
-#        eps = self._opt_param_group['eps'][pg_idx]
-#        pinv = exp_avg_sq.sqrt().add_(eps)
-#        # print(param, ":", pinv)
-#        return pinv
+    # from openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
+    # components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
+    # in case of ADAM - note that averages won't be very useful until we have done 1/(1-beta2) batches, so we
+    # ignore batch size predictions initially
+    # Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
+    def _calculate_preconditioner(self, pg_idx, param, where="local"):
+        if not self._use_preconditioner:
+            return torch.ones_like(param, memory_format=torch.preserve_format)
+        else:
+            if not self._is_adaptive or param not in self._optimizer.state:
+                return torch.ones_like(param, memory_format=torch.preserve_format)
+            # get current state for param
+            state = self._optimizer.state[param]
+            # get param group settings
+            group = self._optimizer.param_groups[pg_idx]
+            beta1, beta2 = group['betas']
+            step = group['step']
+            self._inner_opt_step = group['step']
+            exp_avg_sq = state["exp_avg_sq"].clone()
+            eps = self._opt_param_group['eps'][pg_idx]
+            bias_correction = 1 - beta2 ** step
+            pinv = (exp_avg_sq / bias_correction).sqrt().add_(eps)
+            return pinv
+

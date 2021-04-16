@@ -340,6 +340,12 @@ def parse_arguments():
                         action='store_true',
                         help='Enable AdaScale for large batch sizes'
                         )
+
+    parser.add_argument('--use_preconditioner',
+                        default=False,
+                        action='store_true',
+                        help='condition gradients with moving average stats'
+                        )
     
     parser.add_argument('--enable_gns',
                         default=False,
@@ -483,7 +489,9 @@ def prepare_model_and_optimizer(args, device):
                              rank=get_rank(),
                              is_adaptive=(type(optimizer) is FusedLAMB or type(optimizer) is FusedAdam),
                              smoothing=smoothing,
-                             scaler=scaler)
+                             scaler=scaler,
+                             use_preconditioner=args.use_preconditioner)
+
         optimizer.set_scale(args.lr_scale)
  
     lr_scheduler = PolyWarmUpScheduler(optimizer, 
