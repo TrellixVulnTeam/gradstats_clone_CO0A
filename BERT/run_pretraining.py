@@ -764,7 +764,7 @@ def main():
                             lr_scheduler.step()  # learning rate warmup
                         global_step = take_optimizer_step(args, scaler, optimizer, model, overflow_buf, global_step)
 
-                    if global_step >= args.steps_this_run or timeout_sent:
+                    if adascale_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
                         last_num_steps = int(training_steps / args.gradient_accumulation_steps) % args.log_freq
                         last_num_steps = args.log_freq if last_num_steps == 0 else last_num_steps
@@ -780,7 +780,7 @@ def main():
                         if is_main_process():
                             if not args.use_adascale:
                                 gain = 1.0
-                                adascale_step = training_steps // args.gradient_accumulation_steps
+                                adascale_step = global_step # training_steps // args.gradient_accumulation_steps
                             dllogger.log(step=(epoch, global_step, ), data={"average_loss": average_loss / (args.log_freq * divisor),
                                                                             "step_loss": loss.item() * args.gradient_accumulation_steps / divisor,
                                                                             "learning_rate": optimizer.param_groups[0]['lr'],
@@ -792,7 +792,7 @@ def main():
                         average_loss = 0
 
 
-                    if global_step >= args.steps_this_run or training_steps % (
+                    if adascale_step >= args.steps_this_run or training_steps % (
                             args.num_steps_per_checkpoint * args.gradient_accumulation_steps) == 0 or timeout_sent:
                         if is_main_process() and not args.skip_checkpoint:
                             # Save a trained model
@@ -818,7 +818,7 @@ def main():
 
                         # Exiting the training due to hitting max steps, or being sent a 
                         # timeout from the cluster scheduler
-                        if global_step >= args.steps_this_run or timeout_sent:
+                        if adascale_step >= args.steps_this_run or timeout_sent:
                             del train_dataloader
                             # thread.join()
                             return args, final_loss, train_time_raw, global_step
