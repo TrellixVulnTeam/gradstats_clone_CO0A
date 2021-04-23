@@ -14,11 +14,12 @@
 # limitations under the License.
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
-
 source /shared/conda/bin/activate /shared/conda/envs/adascale_bert/
-code_dir="/shared/scaling_without_tuning/BERT"
-#init_checkpoint=${1:-"$code_dir/results/pretrain_base_4/checkpoints/ckpt_8601.pt"} 
-init_checkpoint=${1:-"$code_dir/results/pretrain_base_adamw_4node/checkpoints/ckpt_8601.pt"} 
+
+code_dir="/shared/scaling_without_tuning/BERT_adascale/"
+#init_checkpoint=${1:-"$code_dir/results/pretrain_base_4/checkpoints/ckpt_8601.pt"}
+init_checkpoint=${1:-"$code_dir/results/pretrain_base_adamw_8node_gns_autoamp_precond/checkpoints/ckpt_5697.pt"} 
+# init_checkpoint="/shared/scaling_without_tuning/BERT/results/pretrain_base_adamw_4node_gns_autoamp_precond/checkpoints/ckpt_8601.pt"
 # checkpoints/ckpt_7038.pt"}
 epochs=${2:-"2.0"}
 batch_size=${3:-"4"}
@@ -28,7 +29,7 @@ num_gpu=${6:-"8"}
 seed=${7:-"1"}
 squad_dir=${8:-"/shared/data/nlp/SQUAD/download/squad/v1.1"}
 vocab_file=${9:-"/shared/data/nlp/SQUAD/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
-OUT_DIR=${10:-"/shared/scaling_without_tuning/BERT/results/SQuAD_adamw"}
+OUT_DIR=${10:-"/shared/scaling_without_tuning/BERT/results/SQuAD_adascale_128K_debug"}
 mode=${11:-"train eval"}
 CONFIG_FILE=${12:-"/shared/scaling_without_tuning/BERT/bert_base_config.json"}
 max_steps=${13:-"-1"}
@@ -60,6 +61,7 @@ if [ "$mode" = "train" ] ; then
   CMD+="--do_train "
   CMD+="--train_file=$squad_dir/train-v1.1.json "
   CMD+="--train_batch_size=$batch_size "
+  CMD+="--lr_scale=1.0 "
 elif [ "$mode" = "eval" ] ; then
   CMD+="--do_predict "
   CMD+="--predict_file=$squad_dir/dev-v1.1.json "
@@ -94,7 +96,6 @@ CMD+=" --config_file=$CONFIG_FILE "
 CMD+=" --max_steps=$max_steps "
 CMD+=" $use_fp16"
 CMD+=" --json-summary=$OUT_DIR/dllogger.json "
-
 LOGFILE=$OUT_DIR/logfile.txt
 echo "$CMD |& tee $LOGFILE"
 time $CMD |& tee $LOGFILE

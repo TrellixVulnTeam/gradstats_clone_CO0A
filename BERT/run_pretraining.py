@@ -456,6 +456,7 @@ def prepare_model_and_optimizer(args, device):
             global_step -= args.phase1_end_step
         if is_main_process():
             print("resume step from ", args.resume_step)
+            print("checkpoint keys ", checkpoint.keys())
 
     model.to(device)
     param_optimizer = list(model.named_parameters())
@@ -809,7 +810,7 @@ def main():
                                             'scaler': scaler.state_dict(),
                                             'files': [f_id] + files,
                                             'epoch': epoch,
-                                            'data_loader': None if global_step >= args.max_steps else train_dataloader}, output_save_file)
+                                            'data_loader': None if adascale_step >= args.max_steps else train_dataloader}, output_save_file)
 
                                 most_recent_ckpts_paths.append(output_save_file)
                                 if len(most_recent_ckpts_paths) > 3:
