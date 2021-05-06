@@ -69,10 +69,10 @@ at::Tensor max_pool_nhwc_fwd(
                       pool_desc,
                       &alpha,
                       x_desc.desc(),
-                      x.data<at::Half>(),
+                      x.data_ptr<at::Half>(),
                       &beta,
                       y_desc.desc(),
-                      y.data<at::Half>());
+                      y.data_ptr<at::Half>());
 
   cudnnDestroyPoolingDescriptor(pool_desc);
   return y;
@@ -121,14 +121,14 @@ at::Tensor max_pool_nhwc_bwd(const at::Tensor& x_t,
                        pool_desc,
                        &alpha,
                        y_desc.desc(),
-                       y.data<at::Half>(),
+                       y.data_ptr<at::Half>(),
                        dy_desc.desc(),
-                       grad_y.data<at::Half>(),
+                       grad_y.data_ptr<at::Half>(),
                        x_desc.desc(),
-                       x.data<at::Half>(),
+                       x.data_ptr<at::Half>(),
                        &beta,
                        dx_desc.desc(),
-                       dx.data<at::Half>());
+                       dx.data_ptr<at::Half>());
 
   return dx;
 }

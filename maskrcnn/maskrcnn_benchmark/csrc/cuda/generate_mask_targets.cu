@@ -455,7 +455,7 @@ at::Tensor generate_mask_targets_cuda(at::Tensor dense_vector, const std::vector
                                                                  M, M,
                                                                  d_mask_t.data_ptr<byte>());
                                                                  
-    merge_masks_cuda_kernel<<<num_of_anchors, 256, 0, stream.stream()>>>(d_mask_t.data<byte>(), result.data_ptr<float>(),
+    merge_masks_cuda_kernel<<<num_of_anchors, 256, 0, stream.stream()>>>(d_mask_t.data_ptr<byte>(), result.data_ptr<float>(),
                                                                       M, d_per_anchor_poly_idx.data_ptr<int>(),
                                                                       num_of_anchors);
     return result;

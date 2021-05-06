@@ -31,6 +31,10 @@
 #define TORCH_CUDA_API AT_CUDA_API
 #endif
 
+// AS: hack
+#define TORCH_CUDA_API
+
+
 namespace at { namespace native { namespace nhwc {
 
 // TODO: Add constructors for all of the descriptors
