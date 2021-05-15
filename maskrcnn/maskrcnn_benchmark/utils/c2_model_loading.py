@@ -129,8 +129,17 @@ def _rename_weights_for_resnet(weights, stage_names):
 
     return new_weights
 
-
 def _load_c2_pickled_weights(file_path):
+    with open(file_path, "rb") as f:
+        data = pickle.load(f, encoding="latin1")
+    if "blobs" in data:
+        weights = data["blobs"]
+    else:
+        weights = data
+    return weights
+
+
+def _load_c2_pickled_weights_old(file_path):
     with open(file_path, "rb") as f:
         if torch._six.PY3:
             data = pickle.load(f, encoding="latin1")

@@ -5,7 +5,7 @@ FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py3
 ADD gradstats $HOME/gradstats
 
 # generic deps
-RUN pip install tqdm
+RUN pip install tqdm tensorboard yacs
 
 # mask rcnn deps
 
@@ -33,3 +33,5 @@ RUN pip install nltk html2text progressbar onnxruntime git+https://github.com/NV
 
 # Install vim for in-container edits
 RUN apt-get install -q -y vim
+
+WORKDIR $HOME/gradstats

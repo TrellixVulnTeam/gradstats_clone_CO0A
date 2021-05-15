@@ -1,0 +1,1 @@
+docker run -d -t --network=host --gpus all --shm-size=1g --ulimit memlock=-1 --ulimit stack=67108864 --name master-0 -v ~/shared:/shared 427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:latest

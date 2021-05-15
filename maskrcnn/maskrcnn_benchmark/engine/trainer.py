@@ -144,6 +144,8 @@ def do_train(
 
         if measure_gns:
             gns = optimizer.gns(scale_one_batch_size=32) #FIXME: pass from main training loop
+        else:
+            gns = 0.0
 
         if use_adascale:
             gain = optimizer.scale_invariant_steps(aggressive_base_schedule=step > 500) # adascale specific FIXME: hardcoded for now
