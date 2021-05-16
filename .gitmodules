@@ -1,0 +1,3 @@
+[submodule "eks/aws-fsx-csi-driver"]
+	path = eks/aws-fsx-csi-driver
+	url = https://github.com/kubernetes-sigs/aws-fsx-csi-driver.git

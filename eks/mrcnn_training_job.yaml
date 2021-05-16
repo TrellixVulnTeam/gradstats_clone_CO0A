@@ -1,0 +1,62 @@
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: "adascale-gpu-ddp-job"
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:latest" 
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_1x.sh"
+            resources:
+              limits:
+                nvidia.com/gpu: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim
+          - name: dshm
+            emptyDir:
+              medium: Memory
+    Worker:
+      replicas: 7
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:latest" 
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_1x.sh"
+            resources:
+              limits:
+                nvidia.com/gpu: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim
+          - name: dshm
+            emptyDir:
+              medium: Memory
