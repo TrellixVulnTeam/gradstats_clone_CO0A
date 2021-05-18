@@ -16,7 +16,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_nx.sh 2.0 /shared/export/"
+            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_nx.sh 2.0 /shared/export/logs/mrcnn/2x/"
             resources:
               limits:
                 nvidia.com/gpu: 1
@@ -44,7 +44,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_nx.sh 2.0 /shared/export/"
+            - "cd /gradstats/maskrcnn && ./launch_adascale_sgdw_nx.sh 2.0 /shared/export/logs/mrcnn/2x"
             resources:
               limits:
                 nvidia.com/gpu: 1
