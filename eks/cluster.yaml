@@ -16,7 +16,7 @@ nodeGroups:
   - us-east-1a
   minSize: 1
   desiredCapacity: 1
-  maxSize: 1
+  maxSize: 32
   disableIMDSv1: false
   disablePodIMDS: false
   iam:

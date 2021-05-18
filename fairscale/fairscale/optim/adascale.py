@@ -530,8 +530,8 @@ class AdaScale(Optimizer):
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
-        if self._rank == 0:
-            print("local", self._local_grad_sqr, "total:", total_grad_sqr, "loss_scale:", curr_loss_scale)
+        # if self._rank == 0:
+        #     print("local", self._local_grad_sqr, "total:", total_grad_sqr, "loss_scale:", curr_loss_scale)
 
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
@@ -604,7 +604,7 @@ class AdaScale(Optimizer):
         for pg_idx, param_group in enumerate(self._optimizer.param_groups):
             original_lr.append(param_group["lr"])
             param_group["lr"] = self.gain(pg_idx=pg_idx) * param_group["lr"]
-
+        res = None
         # Step it.
         if self._scaler:
             res = self._scaler.step(self._optimizer) #.step(*args, **kwargs)
