@@ -1,0 +1,37 @@
+# base container with EFA support - needs to be tested
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
+
+# all the dependencies
+ADD gradstats $HOME/gradstats
+
+# generic deps
+RUN pip install tqdm tensorboard yacs
+
+# mask rcnn deps
+
+# env for custom kernels
+ENV TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0"
+ARG FORCE_CUDA="1"
+ENV FORCE_CUDA=${FORCE_CUDA}
+
+RUN pip --no-cache-dir --no-cache install 'git+https://github.com/NVIDIA/cocoapi#egg=pycocotools&subdirectory=PythonAPI'
+RUN pip install --no-cache-dir https://github.com/mlperf/logging/archive/9ea0afa.zip
+WORKDIR $HOME/gradstats/maskrcnn
+# this takes very long on p3.2x
+# ensure that we have cudnn.h in the path - required by PT custom cuda op compilation step
+
+COPY /gradstats/cuda/include/*.h /usr/local/cuda/include/
+RUN python setup.py build develop
+
+# adascale deps
+#
+WORKDIR $HOME/gradstats/fairscale
+RUN pip install -e .
+
+# bert deps
+RUN pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger
+
+# Install vim for in-container edits
+RUN apt-get install -q -y vim
+
+WORKDIR $HOME/gradstats
