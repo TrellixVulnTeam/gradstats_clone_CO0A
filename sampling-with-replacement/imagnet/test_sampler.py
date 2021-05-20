@@ -215,7 +215,7 @@ def main_worker(gpu, ngpus_per_node, args):
         ]))
 
     if args.distributed:
-        train_sampler = DistributedSampler(train_dataset)
+        train_sampler = DistributedSampler(train_dataset, seed=2047 * args.rank)
     else:
         train_sampler = None
 

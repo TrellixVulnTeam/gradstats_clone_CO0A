@@ -96,6 +96,10 @@ class DistributedSampler(Sampler[T_co]):
             # g.manual_seed(self.seed + self.epoch)
             g.manual_seed(self.seed + self.rank + self.epoch)
             indices = torch.randperm(len(self.dataset), generator=g).tolist()  # type: ignore[arg-type]
+            print(indices[:10])
+            print(f"seed is {self.seed}")
+            print(f"rank is {self.rank}")
+            print(f"epoch is {self.epoch}")
         else:
             indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
 
@@ -122,7 +126,6 @@ class DistributedSampler(Sampler[T_co]):
         #indices = [indices[i] for i in sorted(index_list)]
         #print(indices[:10])
         # assert len(indices) == self.num_samples
-        print(indices[:10])
         return iter(indices)
 
     def __len__(self) -> int:
