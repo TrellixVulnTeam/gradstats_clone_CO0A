@@ -3,7 +3,7 @@ batch size 2048, learning rate 0.8, 8 gpus.
 
 Results table:
 
-| Epoch | Without Replacement | Without Replacement |
+| Epoch | Without Replacement | With Replacement |
 | --- | --- | --- |
 | 0 | Acc@1 1.250 Acc@5 4.664 | Acc@1 1.212 Acc@5 4.698 |
 | 5 | Acc@1 29.734 Acc@5 54.930 | Acc@1 32.538 Acc@5 58.160 |
