@@ -2,20 +2,16 @@ import math
 from typing import TypeVar, Optional, Iterator
 
 import torch
-from . import Sampler, Dataset
+from torch.utils.data.distributed import DistributedSampler, Sampler, Dataset
 import torch.distributed as dist
 
 
 T_co = TypeVar('T_co', covariant=True)
 
 
-class DistributedSampler(Sampler[T_co]):
-    r"""Sampler that restricts data loading to a subset of the dataset.
-    It is especially useful in conjunction with
-    :class:`torch.nn.parallel.DistributedDataParallel`. In such a case, each
-    process can pass a :class:`~torch.utils.data.DistributedSampler` instance as a
-    :class:`~torch.utils.data.DataLoader` sampler, and load a subset of the
-    original dataset that is exclusive to it.
+class ReplacementDistributedSampler(DistributedSampler):
+    r"""
+    DataSampler used for adascale with sampling replacement.
     .. note::
         Dataset is assumed to be of constant size.
     Args:
@@ -91,20 +87,18 @@ class DistributedSampler(Sampler[T_co]):
 
     def __iter__(self) -> Iterator[T_co]:
         if self.shuffle:
-            # deterministically shuffle based on epoch and seed
+            # deterministically shuffle based on epoch, seed and rank
             g = torch.Generator()
             # g.manual_seed(self.seed + self.epoch)
             g.manual_seed(self.seed + self.rank + self.epoch)
             indices = torch.randperm(len(self.dataset), generator=g).tolist()  # type: ignore[arg-type]
-            print(indices[:10])
-            print(f"seed is {self.seed}")
-            print(f"rank is {self.rank}")
-            print(f"epoch is {self.epoch}")
+            print(f"epoch is {self.epoch}, seed is {self.seed}, rank is {self.rank}, \n"
+                  f"dataset total_size is {self.total_size}, indices len is {len(indices)}, \n"
+                  f"first 10 indices of current dataloader are \n "
+                  f"{indices[:10]}")
         else:
             indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
 
-        print(f'self.total_size is {self.total_size}')
-        print(f'len(indices) is {len(indices)}')
         if not self.drop_last:
             # add extra samples to make it evenly divisible
             padding_size = self.total_size - len(indices)
@@ -127,16 +121,3 @@ class DistributedSampler(Sampler[T_co]):
         #print(indices[:10])
         # assert len(indices) == self.num_samples
         return iter(indices)
-
-    def __len__(self) -> int:
-        return self.num_samples
-
-    def set_epoch(self, epoch: int) -> None:
-        r"""
-        Sets the epoch for this sampler. When :attr:`shuffle=True`, this ensures all replicas
-        use a different random ordering for each epoch. Otherwise, the next iteration of this
-        sampler will yield the same ordering.
-        Args:
-            epoch (int): Epoch number.
-        """
-        self.epoch = epoch
