@@ -21,8 +21,9 @@ export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
 
-# 128K GBS settings - note these hps are the same as 64K except we have doubled the world size and set lr scale
-train_batch_size=${1:-2048}
+# 128K GBS settings - note these hps are the same as 64K except we either double the world size or double the train batch size by doubling accum steps and set lr scale
+# for example, train bs for phase 1 is 4096 with 32 gpus  or 2048 with 64 gpus
+train_batch_size=${1:-4096}
 learning_rate=${2:-"1.3653e-3"}
 adamw_beta1=0.952378
 adamw_beta2=0.86471
@@ -37,7 +38,7 @@ save_checkpoint_steps=${7:-500}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-128}
+gradient_accumulation_steps=${11:-256}
 seed=${12:-12439}
 job_name=${13:-"bert_adamw_pretraining"}
 #allreduce_post_accumulation=${14:-"true"}
@@ -45,7 +46,7 @@ job_name=${13:-"bert_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"false"}
 #allreduce_post_accumulation_fp16=${15:-"true"}
 allreduce_post_accumulation_fp16=${15:-"false"}
-train_batch_size_phase2=${16:-1024}
+train_batch_size_phase2=${16:-2048}
 learning_rate_phase2=${17:-"6.1951e-5"}
 adamw_phase2_beta1=0.65322
 adamw_phase2_beta2=0.82451
@@ -54,7 +55,7 @@ adamw_phase2_weight_decay=0.19891
 warmup_proportion_phase2=${18:-"0.25"}
 #train_steps_phase2=${19:-781}
 train_steps_phase2=${19:-1563}
-gradient_accumulation_steps_phase2=${20:-256}
+gradient_accumulation_steps_phase2=${20:-512}
 DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
 DATA_DIR_PHASE1=/shared/benchmarking_datasets/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
 BERT_CONFIG=/gradstats/BERT/bert_base_config.json
