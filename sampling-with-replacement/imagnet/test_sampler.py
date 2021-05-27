@@ -18,6 +18,9 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 from customized_sampler import ReplacementDistributedSampler
+from torch.utils.tensorboard import SummaryWriter
+
+from utils import upload_file, is_global_rank_zero
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -74,9 +77,11 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+parser.add_argument('--log_dir', default='/mnt', type=str,
+                    help='log directory path.')
 
 best_acc1 = 0
-
+global_train_step = 0
 
 def main():
     args = parser.parse_args()
@@ -233,6 +238,12 @@ def main_worker(gpu, ngpus_per_node, args):
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
+    # tensorboard summary writer
+    if is_global_rank_zero():
+        writer = SummaryWriter("my_experiment")
+    else:
+        writer = None
+
     if args.evaluate:
         validate(val_loader, model, criterion, args)
         return
@@ -243,34 +254,40 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node)
+        train(train_loader, model, criterion, optimizer,
+              epoch, args, ngpus_per_node, writer)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, args, epoch, writer)
 
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        # is_best = acc1 > best_acc1
+        # best_acc1 = max(acc1, best_acc1)
 
-        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-                and args.rank % ngpus_per_node == 0):
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'arch': args.arch,
-                'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
-                'optimizer' : optimizer.state_dict(),
-            }, is_best)
+        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+        #         and args.rank % ngpus_per_node == 0):
+        #     save_checkpoint({
+        #         'epoch': epoch + 1,
+        #         'arch': args.arch,
+        #         'state_dict': model.state_dict(),
+        #         'best_acc1': best_acc1,
+        #         'optimizer' : optimizer.state_dict(),
+        #     }, is_best)
+    # close summary writer
+    if is_global_rank_zero():
+        writer.close()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node):
+def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node, writer):
+    global global_train_step
+
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
-        len(train_loader),
+        len(train_loader) // ngpus_per_node + 1,
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
 
@@ -281,7 +298,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
     for i, (images, target) in enumerate(train_loader):
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        if i > (len(train_loader) // ngpus_per_node):
+        # if i > (len(train_loader) // ngpus_per_node + 1):
+        if i > 20:
             break
         # measure data loading time
         data_time.update(time.time() - end)
@@ -312,9 +330,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
 
         if i % args.print_freq == 0:
             progress.display(i)
+            if writer != None:
+                writer.add_scalar('Train/Loss', losses.avg, global_train_step)
+                writer.add_scalar('Train/Accuracy_top1', top1.avg, global_train_step)
+                writer.add_scalar('Train/Accuracy_top5', top5.avg, global_train_step)
+                writer.add_scalar('Train/Batch_time', batch_time.avg, global_train_step)
+                writer.add_scalar('Train/Data_time', data_time.avg, global_train_step)
+                writer.flush()
+            # update the tensorboard log in s3 bucket
+            # upload_file('/home/ubuntu/README', 'mzanur-autoscaler', 'log_test/README_file')
+        global_train_step += 1
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, args, epoch, writer):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -330,6 +358,8 @@ def validate(val_loader, model, criterion, args):
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
+            if i > 20:
+                break
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
             if torch.cuda.is_available():
@@ -351,6 +381,10 @@ def validate(val_loader, model, criterion, args):
 
             if i % args.print_freq == 0:
                 progress.display(i)
+        if writer != None:
+            writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
+            writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
+            writer.flush()
 
         # TODO: this should also be done with the ProgressMeter
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
