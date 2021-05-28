@@ -20,7 +20,7 @@ import torchvision.models as models
 from customized_sampler import ReplacementDistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 
-from utils import upload_file, is_global_rank_zero
+from utils import upload_dir
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -77,8 +77,13 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
-parser.add_argument('--log_dir', default='/mnt', type=str,
+parser.add_argument('--log_dir', default='/mnt/logs', type=str,
                     help='log directory path.')
+parser.add_argument('--label', type=str,
+                    help='label used to create log directory, '
+                         'by default should be time in seconds')
+parser.add_argument('--bucket', type=str, default='mzanur-autoscaler',
+                    help='s3 bucket for tensorboard')
 
 best_acc1 = 0
 global_train_step = 0
@@ -239,13 +244,10 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True)
 
     # tensorboard summary writer
-    if is_global_rank_zero():
-        writer = SummaryWriter("my_experiment")
-    else:
-        writer = None
+    writer = SummaryWriter(f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}')
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, model, criterion, args, epoch, writer)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -274,8 +276,7 @@ def main_worker(gpu, ngpus_per_node, args):
         #         'optimizer' : optimizer.state_dict(),
         #     }, is_best)
     # close summary writer
-    if is_global_rank_zero():
-        writer.close()
+    writer.close()
 
 
 def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node, writer):
@@ -330,15 +331,14 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
 
         if i % args.print_freq == 0:
             progress.display(i)
-            if writer != None:
-                writer.add_scalar('Train/Loss', losses.avg, global_train_step)
-                writer.add_scalar('Train/Accuracy_top1', top1.avg, global_train_step)
-                writer.add_scalar('Train/Accuracy_top5', top5.avg, global_train_step)
-                writer.add_scalar('Train/Batch_time', batch_time.avg, global_train_step)
-                writer.add_scalar('Train/Data_time', data_time.avg, global_train_step)
-                writer.flush()
+            writer.add_scalar('Train/Loss', losses.avg, global_train_step)
+            writer.add_scalar('Train/Accuracy_top1', top1.avg, global_train_step)
+            writer.add_scalar('Train/Accuracy_top5', top5.avg, global_train_step)
+            writer.add_scalar('Train/Batch_time', batch_time.avg, global_train_step)
+            writer.add_scalar('Train/Data_time', data_time.avg, global_train_step)
+            writer.flush()
             # update the tensorboard log in s3 bucket
-            # upload_file('/home/ubuntu/README', 'mzanur-autoscaler', 'log_test/README_file')
+            upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
         global_train_step += 1
 
 
@@ -381,10 +381,12 @@ def validate(val_loader, model, criterion, args, epoch, writer):
 
             if i % args.print_freq == 0:
                 progress.display(i)
-        if writer != None:
-            writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
-            writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
-            writer.flush()
+
+        # tensorboard update
+        writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
+        writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
+        writer.flush()
+        upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
 
         # TODO: this should also be done with the ProgressMeter
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
