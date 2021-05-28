@@ -263,18 +263,18 @@ def main_worker(gpu, ngpus_per_node, args):
         acc1 = validate(val_loader, model, criterion, args, epoch, writer)
 
         # remember best acc@1 and save checkpoint
-        # is_best = acc1 > best_acc1
-        # best_acc1 = max(acc1, best_acc1)
+        is_best = acc1 > best_acc1
+        best_acc1 = max(acc1, best_acc1)
 
-        # if not args.multiprocessing_distributed or (args.multiprocessing_distributed
-        #         and args.rank % ngpus_per_node == 0):
-        #     save_checkpoint({
-        #         'epoch': epoch + 1,
-        #         'arch': args.arch,
-        #         'state_dict': model.state_dict(),
-        #         'best_acc1': best_acc1,
-        #         'optimizer' : optimizer.state_dict(),
-        #     }, is_best)
+        if not args.multiprocessing_distributed or (args.multiprocessing_distributed
+                and args.rank % ngpus_per_node == 0):
+            save_checkpoint({
+                'epoch': epoch + 1,
+                'arch': args.arch,
+                'state_dict': model.state_dict(),
+                'best_acc1': best_acc1,
+                'optimizer' : optimizer.state_dict(),
+            }, is_best)
     # close summary writer
     writer.close()
 
@@ -299,8 +299,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
     for i, (images, target) in enumerate(train_loader):
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        # if i > (len(train_loader) // ngpus_per_node + 1):
-        if i > 20:
+        if i > (len(train_loader) // ngpus_per_node + 1):
             break
         # measure data loading time
         data_time.update(time.time() - end)
@@ -358,8 +357,6 @@ def validate(val_loader, model, criterion, args, epoch, writer):
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
-            if i > 20:
-                break
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
             if torch.cuda.is_available():
