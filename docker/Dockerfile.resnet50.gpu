@@ -1,0 +1,31 @@
+# base container with EFA support - needs to be tested
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
+
+# all the dependencies
+ADD gradstats $HOME/gradstats
+
+# generic deps
+RUN pip install tqdm tensorboard yacs
+
+# mask rcnn deps
+
+# env for custom kernels
+ENV TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0"
+ARG FORCE_CUDA="1"
+ENV FORCE_CUDA=${FORCE_CUDA}
+
+# adascale deps
+#
+WORKDIR $HOME/gradstats/fairscale
+RUN pip install -e .
+
+# bert deps
+RUN pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger
+
+# resnet deps
+# NONE SO FAR
+
+# Install vim for in-container edits
+RUN apt-get install -q -y vim
+
+WORKDIR $HOME/gradstats

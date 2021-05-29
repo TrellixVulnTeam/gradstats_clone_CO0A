@@ -13,5 +13,6 @@ parameters:
   # S3 output path
   s3ExportPath: s3://mzanur-autoscaler/export
   deploymentType: SCRATCH_2
+  # autoImportPolicy: NEW_CHANGED
 mountOptions:
   - flock

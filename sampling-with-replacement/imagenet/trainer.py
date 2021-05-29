@@ -17,7 +17,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from customized_sampler import ReplacementDistributedSampler
+from with_replacement_sampler import ReplacementDistributedSampler
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
