@@ -18,6 +18,10 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 from with_replacement_sampler import ReplacementDistributedSampler
+from torch.utils.tensorboard import SummaryWriter
+from utils import upload_dir
+
+
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -74,9 +78,16 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+parser.add_argument('--log_dir', default='/mnt/logs', type=str,
+                    help='log directory path.')
+parser.add_argument('--label', type=str,
+                    help='label used to create log directory, '
+                         'by default should be time in seconds')
+parser.add_argument('--bucket', type=str, default='mzanur-autoscaler',
+                    help='s3 bucket for tensorboard')
 
 best_acc1 = 0
-
+global_train_step = 0
 
 def main():
     args = parser.parse_args()
@@ -233,8 +244,11 @@ def main_worker(gpu, ngpus_per_node, args):
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
+    # tensorboard summary writer
+    writer = SummaryWriter(f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}')
+
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, model, criterion, args, epoch, writer)
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -243,10 +257,11 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node)
+        train(train_loader, model, criterion, optimizer,
+              epoch, args, ngpus_per_node, writer)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, args, epoch, writer)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -261,16 +276,20 @@ def main_worker(gpu, ngpus_per_node, args):
                 'best_acc1': best_acc1,
                 'optimizer' : optimizer.state_dict(),
             }, is_best)
+    # close summary writer
+    writer.close()
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node):
+def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node, writer):
+    global global_train_step
+
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(
-        len(train_loader),
+        len(train_loader) // ngpus_per_node + 1,
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
 
@@ -281,7 +300,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
     for i, (images, target) in enumerate(train_loader):
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        if i > (len(train_loader) // ngpus_per_node):
+        if i > (len(train_loader) // ngpus_per_node + 1):
             break
         # measure data loading time
         data_time.update(time.time() - end)
@@ -312,9 +331,18 @@ def train(train_loader, model, criterion, optimizer, epoch, args, ngpus_per_node
 
         if i % args.print_freq == 0:
             progress.display(i)
+            writer.add_scalar('Train/Loss', losses.avg, global_train_step)
+            writer.add_scalar('Train/Accuracy_top1', top1.avg, global_train_step)
+            writer.add_scalar('Train/Accuracy_top5', top5.avg, global_train_step)
+            writer.add_scalar('Train/Batch_time', batch_time.avg, global_train_step)
+            writer.add_scalar('Train/Data_time', data_time.avg, global_train_step)
+            writer.flush()
+            # update the tensorboard log in s3 bucket
+            upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
+        global_train_step += 1
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, args, epoch, writer):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -351,6 +379,12 @@ def validate(val_loader, model, criterion, args):
 
             if i % args.print_freq == 0:
                 progress.display(i)
+
+        # tensorboard update
+        writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
+        writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
+        writer.flush()
+        upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
 
         # TODO: this should also be done with the ProgressMeter
         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
