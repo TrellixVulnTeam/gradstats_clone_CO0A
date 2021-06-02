@@ -122,7 +122,8 @@ class AdaScale(Optimizer):
         is_adaptive:bool = False,
         scaler = None,
         adjust_grads_for_accumulation = False,
-        use_preconditioner = False
+        use_preconditioner = False,
+        summary_writer=None,
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -142,6 +143,7 @@ class AdaScale(Optimizer):
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
         self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
         self._use_preconditioner = use_preconditioner
+        self.summary_writer = summary_writer #TODO: start pushing per worker gradstats to tensorboard
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.

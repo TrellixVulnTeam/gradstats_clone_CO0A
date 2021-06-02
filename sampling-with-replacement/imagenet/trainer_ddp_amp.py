@@ -22,6 +22,9 @@ import numpy as np
 import math
 from fairscale.optim import AdaScale
 
+from torch.utils.tensorboard import SummaryWriter
+from utils import upload_dir, make_path_if_not_exists
+
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -65,10 +68,16 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-    parser.add_argument('--enable_gns',
+    parser.add_argument(
+        '--enable_gns',
+        default=False,
+        action='store_true',
+        help='Enable gradient noise scale measurement for training run')
+
+    parser.add_argument('--enable_adascale',
                         default=False,
                         action='store_true',
-                        help='Enable gradient noise scale measurement for training run')
+                        help='Enable adascale module for training run')
 
     parser.add_argument('--gns_smoothing',
                         type=float,
@@ -86,16 +95,19 @@ def parse_arguments():
                         type=int,
                         metavar='N',
                         help='number of data loading workers (default: 4)')
+
     parser.add_argument('--epochs',
                         default=90,
                         type=int,
                         metavar='N',
                         help='number of total epochs to run')
+
     parser.add_argument('--start-epoch',
                         default=0,
                         type=int,
                         metavar='N',
                         help='manual epoch number (useful on restarts)')
+
     parser.add_argument(
         '-b',
         '--batch-size',
@@ -105,6 +117,7 @@ def parse_arguments():
         help='mini-batch size (default: 256), this is the total '
         'batch size of all GPUs when '
         'using Data Parallel or Distributed Data Parallel')
+
     parser.add_argument('--lr',
                         '--learning-rate',
                         default=0.1,
@@ -112,11 +125,13 @@ def parse_arguments():
                         metavar='LR',
                         help='initial learning rate',
                         dest='lr')
+
     parser.add_argument('--momentum',
                         default=0.9,
                         type=float,
                         metavar='M',
                         help='momentum')
+
     parser.add_argument('--wd',
                         '--weight-decay',
                         default=1e-4,
@@ -124,54 +139,81 @@ def parse_arguments():
                         metavar='W',
                         help='weight decay (default: 1e-4)',
                         dest='weight_decay')
+
     parser.add_argument('-p',
                         '--print-freq',
                         default=10,
                         type=int,
                         metavar='N',
                         help='print frequency (default: 10)')
+
     parser.add_argument('--resume',
                         default='',
                         type=str,
                         metavar='PATH',
                         help='path to latest checkpoint (default: none)')
+
     parser.add_argument('-e',
                         '--evaluate',
                         dest='evaluate',
                         action='store_true',
                         help='evaluate model on validation set')
+
     parser.add_argument('--pretrained',
                         dest='pretrained',
                         action='store_true',
                         help='use pre-trained model')
+
     parser.add_argument('--world-size',
                         default=-1,
                         type=int,
                         help='number of nodes for distributed training')
+
     parser.add_argument('--rank',
                         default=-1,
                         type=int,
                         help='node rank for distributed training')
+
     parser.add_argument('--dist-url',
                         default='env://',
                         type=str,
                         help='url used to set up distributed training')
+
     parser.add_argument('--dist-backend',
                         default='nccl',
                         type=str,
                         help='distributed backend')
+
     parser.add_argument('--seed',
                         default=None,
                         type=int,
                         help='seed for initializing training. ')
+
     parser.add_argument("--local_rank",
                         type=int,
                         default=os.getenv('LOCAL_RANK', -1),
                         help="local_rank for distributed training on gpus")
+
     parser.add_argument("--channels-last",
                         default=False,
                         action="store_true",
                         help="enable channels last for tensor cores")
+
+    parser.add_argument('--log_dir',
+                        default='/shared/logs',
+                        type=str,
+                        help='log directory path.')
+
+    parser.add_argument('--label',
+                        type=str,
+                        default="resnet50_training",
+                        help='label used to create log directory')
+
+    parser.add_argument('--bucket',
+                        type=str,
+                        default='mzanur-autoscaler',
+                        help='s3 bucket for tensorboard')
+
     args = parser.parse_args()
     return args
 
@@ -198,6 +240,11 @@ def setup_training(args):
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     torch.distributed.init_process_group(backend='nccl', init_method='env://')
     args.rank = int(os.environ["RANK"])
+    args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}'
+
+    # create dirs that don't exist
+    make_path_if_not_exists(args.tensorboard_path)
+
     return args
 
 
@@ -230,7 +277,12 @@ def fast_collate(batch, memory_format):
 def main_worker(args):
     global best_acc1
     print("DDP training AMP enabled=", args.amp)
+
+    # loss scaler
     scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+
+    # tensorboard summary writer (by default created for all workers)
+    writer = SummaryWriter(args.tensorboard_path)
 
     # create model
     if args.pretrained:
@@ -258,11 +310,17 @@ def main_worker(args):
                                 weight_decay=args.weight_decay)
 
     # wrap optimizer in AdaScale if predicting batch size or adjusting LR
-    if args.lr_scale > 1.0 or args.enable_gns:
-        args.use_adascale = True
-        optimizer = AdaScale(optimizer, rank=get_rank(), is_adaptive=False, smoothing=None, scaler=scaler) # smoothing coefficient determined by scale
+    if args.enable_adascale or args.enable_gns:
+        optimizer = AdaScale(
+            optimizer,
+            rank=get_rank(),
+            is_adaptive=False,
+            smoothing=None,  # smoothing coefficient determined by scale
+            scaler=scaler,
+            summary_writer=writer)
         optimizer.set_scale(args.lr_scale)
-        print("Adascale rank", get_rank(), "setting scale to", args.lr_scale)
+        print("=> adascale rank", get_rank(), "setting scale to",
+              args.lr_scale)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -283,16 +341,12 @@ def main_worker(args):
     # Data loading code
     traindir = os.path.join(args.data, 'train')
     valdir = os.path.join(args.data, 'val')
-    # normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-    #                                 std=[0.229, 0.224, 0.225])
 
     train_dataset = datasets.ImageFolder(
         traindir,
         transforms.Compose([
             transforms.RandomResizedCrop(224),
             transforms.RandomHorizontalFlip(),
-            # transforms.ToTensor(),
-            # normalize,
         ]))
 
     val_dataset = datasets.ImageFolder(
@@ -300,8 +354,6 @@ def main_worker(args):
         transforms.Compose([
             transforms.Resize(256),
             transforms.CenterCrop(224),
-            # transforms.ToTensor(),
-            # normalize,
         ]))
 
     collate_fn = lambda b: fast_collate(b, memory_format)
@@ -336,7 +388,8 @@ def main_worker(args):
                                              collate_fn=collate_fn)
 
     if args.evaluate:
-        validate(val_loader, model, criterion, args)
+        validate(val_loader, model, criterion, writer, epoch, args)
+        writer.close()
         return
 
     for epoch in range(args.start_epoch, args.epochs):
@@ -344,10 +397,11 @@ def main_worker(args):
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, scaler, epoch, args)
+        train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
+              args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        acc1 = validate(val_loader, model, criterion, writer, epoch, args)
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -362,6 +416,8 @@ def main_worker(args):
                     'best_acc1': best_acc1,
                     'optimizer': optimizer.state_dict(),
                 }, is_best)
+    # close summary writer
+    writer.close()
 
 
 class data_prefetcher():
@@ -421,19 +477,21 @@ class data_prefetcher():
         return input, target
 
 
-def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
+def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
+          args):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    scale_one_bs = int(args.batch_size * get_world_size() // args.lr_scale) # multiply by world size to account for division earlier
-    scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_bs)
-    print("###", scale_one_bs, len(train_loader))
-    progress = ProgressMeter(
-        scale_one_steps_per_epoch,
-        [batch_time, data_time, losses, top1, top5],
-        prefix="Epoch: [{}]".format(epoch))
+    scale_one_bs = int(
+        args.batch_size * get_world_size() // args.lr_scale
+    )  # multiply by world size to account for division earlier
+    scale_one_steps_per_epoch = int(
+        len(train_loader) * args.batch_size // scale_one_bs)
+    progress = ProgressMeter(scale_one_steps_per_epoch,
+                             [batch_time, data_time, losses, top1, top5],
+                             prefix="Epoch: [{}]".format(epoch))
 
     # switch to train mode
     model.train()
@@ -443,9 +501,9 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
     images, target = prefetcher.next()
     i = 0
     adascale_step = 0
-    global_step = 0 # this step has been added only for printing purposes, i.e. track progress every print_freq steps
+    global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
     while images is not None:
-        global_step += 1 
+        global_step += 1
         # `i` below will be progressed as per Adascale gain
         # i += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
@@ -472,23 +530,24 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
         gns = 0.0
         gain = 1.0
         scaler.scale(loss).backward()
-        if args.enable_gns or args.use_adascale:
+        if args.enable_gns or args.enable_adascale:
             if args.enable_gns:
                 gns = optimizer.gns(scale_one_batch_size=scale_one_bs)
-            if args.use_adascale:
-                gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
+            if args.enable_adascale:
+                gain = optimizer.scale_invariant_steps(
+                    aggressive_base_schedule=False)
                 prev_steps = math.floor(adascale_step)
                 adascale_step = adascale_step + gain
                 new_steps = math.floor(adascale_step)
                 scale_invariant_steps = new_steps - prev_steps
                 # progress base scale iteration `i` by scale_invariant_steps
                 i += scale_invariant_steps
-
             # modify step according to gain
             optimizer.step()
         else:
+            i = global_step
             scaler.step(optimizer)
-        
+
         scaler.update()
         # optimizer.zero_grad()
         for param in model.parameters():
@@ -502,11 +561,28 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
 
         if global_step % args.print_freq == 0 and get_rank() == 0:
             progress.display(i)
-            print("gain {} gns {}".format(gain, gns))
+            print("=> gain {} gns {}".format(gain, gns))
+            # tensorboard summaries are logged based on scale invariant iterations
+            # so that we can compare runs (loss values at the same logical stage)
+            writer.add_scalar('Real Iterations', global_step, i)
+            writer.add_scalar('Gain', gain, i)
+            writer.add_scalar('GNS', gns, i)
+            writer.add_scalar('Train/Loss', losses.avg, i)
+            writer.add_scalar('Train/Accuracy_top1', top1.avg, i)
+            writer.add_scalar('Train/Accuracy_top5', top5.avg, i)
+            writer.add_scalar('Train/Batch_time', batch_time.avg, i)
+            writer.add_scalar('Train/Data_time', data_time.avg, i)
+            # flush and push to S3 every 500 iterations FIXME: hardcoded
+            if global_step % 500 == 0:
+                writer.flush()
+                # update the tensorboard log in s3 bucket
+                upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
+                           f'{args.arch}/{args.label}')
+
         images, target = prefetcher.next()
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, criterion, writer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -542,6 +618,13 @@ def validate(val_loader, model, criterion, args):
             progress.display(i)
         images, target = prefetcher.next()
     # FIXME: REPORT average OVER ALL WORKERS
+
+    # tensorboard update
+    writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
+    writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
+    writer.flush()
+    upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
+               f'{args.arch}/{args.label}')
 
     # TODO: this should also be done with the ProgressMeter
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
