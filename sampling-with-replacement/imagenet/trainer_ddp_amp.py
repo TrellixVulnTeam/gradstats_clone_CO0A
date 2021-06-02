@@ -19,6 +19,8 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
+import math
+from fairscale.optim import AdaScale
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -63,11 +65,10 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-    parser.add_argument(
-        '--enable_gns',
-        default=False,
-        action='store_true',
-        help='Enable gradient noise scale measurement for training run')
+    parser.add_argument('--enable_gns',
+                        default=False,
+                        action='store_true',
+                        help='Enable gradient noise scale measurement for training run')
 
     parser.add_argument('--gns_smoothing',
                         type=float,
@@ -256,6 +257,13 @@ def main_worker(args):
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
+    # wrap optimizer in AdaScale if predicting batch size or adjusting LR
+    if args.lr_scale > 1.0 or args.enable_gns:
+        args.use_adascale = True
+        optimizer = AdaScale(optimizer, rank=get_rank(), is_adaptive=False, smoothing=None, scaler=scaler) # smoothing coefficient determined by scale
+        optimizer.set_scale(args.lr_scale)
+        print("Adascale rank", get_rank(), "setting scale to", args.lr_scale)
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -335,7 +343,6 @@ def main_worker(args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
-
         # train for one epoch
         train(train_loader, model, criterion, optimizer, scaler, epoch, args)
 
@@ -420,9 +427,11 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
+    scale_one_bs = int(args.batch_size * get_world_size() // args.lr_scale) # multiply by world size to account for division earlier
+    scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_bs)
+    print("###", scale_one_bs, len(train_loader))
     progress = ProgressMeter(
-        len(train_loader) // get_world_size(
-        ),  # dividing by world size for sampling with replacement
+        scale_one_steps_per_epoch,
         [batch_time, data_time, losses, top1, top5],
         prefix="Epoch: [{}]".format(epoch))
 
@@ -433,11 +442,15 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
     prefetcher = data_prefetcher(train_loader)
     images, target = prefetcher.next()
     i = 0
+    adascale_step = 0
+    global_step = 0 # this step has been added only for printing purposes, i.e. track progress every print_freq steps
     while images is not None:
-        i += 1
+        global_step += 1 
+        # `i` below will be progressed as per Adascale gain
+        # i += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        if i > (len(train_loader) // get_world_size()):
+        if i > scale_one_steps_per_epoch:
             break
         # measure data loading time
         data_time.update(time.time() - end)
@@ -456,12 +469,30 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
         top5.update(acc5[0], images.size(0))
 
         # compute gradient and do SGD step
+        gns = 0.0
+        gain = 1.0
+        scaler.scale(loss).backward()
+        if args.enable_gns or args.use_adascale:
+            if args.enable_gns:
+                gns = optimizer.gns(scale_one_batch_size=scale_one_bs)
+            if args.use_adascale:
+                gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
+                prev_steps = math.floor(adascale_step)
+                adascale_step = adascale_step + gain
+                new_steps = math.floor(adascale_step)
+                scale_invariant_steps = new_steps - prev_steps
+                # progress base scale iteration `i` by scale_invariant_steps
+                i += scale_invariant_steps
+
+            # modify step according to gain
+            optimizer.step()
+        else:
+            scaler.step(optimizer)
+        
+        scaler.update()
         # optimizer.zero_grad()
         for param in model.parameters():
             param.grad = None
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
 
         #torch.cuda.synchronize()
 
@@ -469,8 +500,9 @@ def train(train_loader, model, criterion, optimizer, scaler, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        if i % args.print_freq == 0 and get_rank() == 0:
+        if global_step % args.print_freq == 0 and get_rank() == 0:
             progress.display(i)
+            print("gain {} gns {}".format(gain, gns))
         images, target = prefetcher.next()
 
 
@@ -591,3 +623,4 @@ def accuracy(output, target, topk=(1, )):
 
 if __name__ == '__main__':
     main()
+
