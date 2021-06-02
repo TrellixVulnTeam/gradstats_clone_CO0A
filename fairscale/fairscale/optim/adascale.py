@@ -135,7 +135,7 @@ class AdaScale(Optimizer):
         self._debias_ewma = debias_ewma
         self._rank = rank
         self._is_adaptive = is_adaptive
-        self._gain_invalid = False
+        self._gain_invalid = True
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
         self._smoothing = smoothing
@@ -376,6 +376,8 @@ class AdaScale(Optimizer):
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
+        if sqr == 0.0:
+            return 0.0 # AS: should not be zero - remove check in the future
         gns = scale_one_batch_size * var / sqr
         return gns
 
