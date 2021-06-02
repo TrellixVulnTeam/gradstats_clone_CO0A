@@ -41,6 +41,8 @@ CMD+=" --epochs $TOTAL_EPOCHS"
 CMD+=" $NHWC"
 CMD+=" --lr_scale 8.0"
 CMD+=" --enable_gns"
+CMD+=" --enable_adascale"
+CMD+=" --label resnet_2048_adascale"
 
 # Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node 
 # For EKS we set 8 GPUs per node (pod)
