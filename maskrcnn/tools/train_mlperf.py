@@ -203,7 +203,7 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
     barrier()
     log_start(key=constants.RUN_START)
     barrier()
-
+    print(f'make_data_loader is called, current rank is {get_rank()}')
     data_loader, iters_per_epoch = make_data_loader(
         cfg,
         is_train=True,
@@ -241,6 +241,7 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         checkpoint_period,
         arguments,
         cfg.DISABLE_REDUCED_LOGGING,
+        iters_per_epoch,
         per_iter_start_callback_fn=functools.partial(mlperf_log_epoch_start, iters_per_epoch=iters_per_epoch),
         per_iter_end_callback_fn=per_iter_callback_fn,
         scale=cfg.SOLVER.LR_SCALE,

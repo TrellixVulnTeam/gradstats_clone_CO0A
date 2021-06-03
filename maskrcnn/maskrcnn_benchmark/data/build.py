@@ -61,7 +61,9 @@ def build_dataset(dataset_list, transforms, dataset_catalog, is_train=True):
 
 def make_data_sampler(dataset, shuffle, distributed):
     if distributed:
-        return samplers.DistributedSampler(dataset, shuffle=shuffle)
+        # return samplers.DistributedSampler(dataset, shuffle=shuffle)
+        return samplers.ReplacementDistributedSampler(dataset, shuffle=shuffle)
+
     if shuffle:
         sampler = torch.utils.data.sampler.RandomSampler(dataset)
     else:
@@ -158,6 +160,7 @@ def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0, ran
     datasets, epoch_size = build_dataset(dataset_list, transforms, DatasetCatalog, is_train)
 
     data_loaders = []
+    print(f'number of datasets is {len(datasets)}')
     for dataset in datasets:
         sampler = make_data_sampler(dataset, shuffle, is_distributed)
         batch_sampler = make_batch_data_sampler(
