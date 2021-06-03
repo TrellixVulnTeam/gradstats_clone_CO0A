@@ -564,21 +564,21 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
             print("=> gain {} gns {}".format(gain, gns))
             # tensorboard summaries are logged based on scale invariant iterations
             # so that we can compare runs (loss values at the same logical stage)
-            writer.add_scalar('Real Iterations', global_step, i)
-            writer.add_scalar('Gain', gain, i)
-            writer.add_scalar('GNS', gns, i)
-            writer.add_scalar('Train/Loss', losses.avg, i)
-            writer.add_scalar('Train/Accuracy_top1', top1.avg, i)
-            writer.add_scalar('Train/Accuracy_top5', top5.avg, i)
-            writer.add_scalar('Train/Batch_time', batch_time.avg, i)
-            writer.add_scalar('Train/Data_time', data_time.avg, i)
+            tensorboard_step = scale_one_steps_per_epoch * epoch + i
+            writer.add_scalar('Train/Real Iterations', global_step, tensorboard_step)
+            writer.add_scalar('Train/Gain', gain, tensorboard_step)
+            writer.add_scalar('Train/GNS', gns, tensorboard_step)
+            writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
+            writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
+            writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
+            writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
+            writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
             # flush and push to S3 every 500 iterations FIXME: hardcoded
             if global_step % 500 == 0:
                 writer.flush()
                 # update the tensorboard log in s3 bucket
                 upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
                            f'{args.arch}/{args.label}')
-
         images, target = prefetcher.next()
 
 
