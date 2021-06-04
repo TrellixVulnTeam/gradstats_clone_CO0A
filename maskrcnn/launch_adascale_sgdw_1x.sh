@@ -26,7 +26,7 @@ python -m torch.distributed.launch \
  --nproc_per_node=${NPROC_PER_NODE} \
  --nnodes=${WORLD_SIZE} \
  --node_rank=${RANK} \
- /mnt/tools/train_mlperf.py --config-file '/mnt/configs/e2e_mask_rcnn_R_50_FPN_1x_giou_sgd_ls.yaml' \
+ /mnt/tools/train_mlperf.py --label $(date +%s) --config-file '/mnt/configs/e2e_mask_rcnn_R_50_FPN_1x_giou_sgd_ls.yaml' \
  PATHS_CATALOG '/mnt/maskrcnn_benchmark/config/paths_catalog.py' \
  DISABLE_REDUCED_LOGGING True \
  SOLVER.BASE_LR ${BASE_LR} \

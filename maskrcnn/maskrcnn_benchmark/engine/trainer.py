@@ -10,6 +10,7 @@ import torch.distributed as dist
 
 from maskrcnn_benchmark.utils.comm import get_world_size, is_main_process, synchronize
 from maskrcnn_benchmark.utils.metric_logger import MetricLogger
+from maskrcnn_benchmark.utils.s3 import upload_dir
 
 from apex import amp
 from torch.nn.utils import clip_grad_norm_, clip_grad_value_
@@ -57,6 +58,8 @@ def do_train(
     arguments,
     disable_allreduce_for_logging,
     iters_per_epoch,
+    writer,
+    args,
     per_iter_start_callback_fn=None,
     per_iter_end_callback_fn=None,
     scale=1.0,
@@ -126,9 +129,7 @@ def do_train(
         targets = [target.to(device) for target in targets]
 
         loss_dict = model(images, targets)
-
         losses = sum(loss for loss in loss_dict.values())
-
         # reduce losses over all GPUs for logging purposes
         if not disable_allreduce_for_logging:
             loss_dict_reduced = reduce_loss_dict(loss_dict)
@@ -210,6 +211,18 @@ def do_train(
                     step=step
                 )
             )
+            # write tensorboard information to s3
+            writer.add_scalar('Gain/Gain', gain, step)
+            writer.add_scalar('GNS/GNS,', gns, step)
+            writer.add_scalar('Real Iterations/Real Iterations', iteration, step)
+            writer.add_scalar('Train/Total Loss,', losses, step)
+            writer.add_scalar('Train/loss_classifier,', loss_dict['loss_classifier'], step)
+            writer.add_scalar('Train/loss_box_reg,', loss_dict['loss_box_reg'], step)
+            writer.add_scalar('Train/loss_mask,', loss_dict['loss_mask'], step)
+            writer.add_scalar('Train/loss_objectness,', loss_dict['loss_objectness'], step)
+            writer.flush()
+            upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
+
         if iteration % checkpoint_period == 0 and arguments["save_checkpoints"]:
             checkpointer.save("model_{:07d}".format(iteration), **arguments)
         if step >= max_iter and arguments["save_checkpoints"]:

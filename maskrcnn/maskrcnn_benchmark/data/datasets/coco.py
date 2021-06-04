@@ -44,6 +44,7 @@ class COCODataset(torchvision.datasets.coco.CocoDetection):
         # sort indices for reproducible results
         self.ids = sorted(self.ids)
 
+
         # filter images without detection annotations
         if remove_images_without_annotations:
             ids = []
