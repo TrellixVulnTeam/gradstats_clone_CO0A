@@ -34,11 +34,12 @@ from maskrcnn_benchmark.utils.logger import setup_logger
 from maskrcnn_benchmark.utils.miscellaneous import mkdir
 from maskrcnn_benchmark.utils.mlperf_logger import log_end, log_start, log_event, generate_seeds, broadcast_seeds, barrier, configure_logger
 from maskrcnn_benchmark.utils.async_evaluator import init, get_evaluator, set_epoch_tag
+from maskrcnn_benchmark.utils.s3 import upload_dir
 
 from mlperf_logging.mllog import constants
 from apex import amp
 from torch.nn.parallel import DistributedDataParallel as DDP
-
+from torch.utils.tensorboard import SummaryWriter
 
 torch.backends.cudnn.deterministic = True
 # Loop over all finished async results, return a dict of { tag : (bbox_map, segm_map) }
@@ -63,7 +64,8 @@ def check_completed_tags():
     return {}
 
 
-def mlperf_test_early_exit(iteration, iters_per_epoch, tester, model, distributed, min_bbox_map, min_segm_map):
+def mlperf_test_early_exit(iteration, iters_per_epoch, tester, model,
+                           distributed, min_bbox_map, min_segm_map, writer, args):
     # Note: let iters / epoch == 10k, at iter 9999 we've finished epoch 0 and need to test
     if iteration > 0 and (iteration + 1)% iters_per_epoch == 0:
         synchronize()
@@ -82,7 +84,6 @@ def mlperf_test_early_exit(iteration, iters_per_epoch, tester, model, distribute
     else:
         # Otherwise, check for finished async results
         results = check_completed_tags()
-
         # on master process, check each result for terminating condition
         # sentinel for run finishing
         finished = 0
@@ -90,7 +91,12 @@ def mlperf_test_early_exit(iteration, iters_per_epoch, tester, model, distribute
             for result_epoch, (bbox_map, segm_map) in results.items():
                 logger = logging.getLogger('maskrcnn_benchmark.trainer')
                 logger.info('bbox mAP: {}, segm mAP: {}'.format(bbox_map, segm_map))
-
+                # tensorboard writing
+                writer.add_scalar('Test/bbox_map', bbox_map, result_epoch)
+                writer.add_scalar('Test/segm_map,', segm_map, result_epoch)
+                writer.flush()
+                upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'{args.arch}/{args.label}')
+                print(f'bbox_map is {bbox_map}, segm_map is {segm_map}')
                 log_event(key=constants.EVAL_ACCURACY, value={"BBOX" : bbox_map, "SEGM" : segm_map}, metadata={"epoch_num" : result_epoch} )
                 log_end(key=constants.EVAL_STOP, metadata={"epoch_num": result_epoch})
                 # terminating condition
@@ -140,7 +146,7 @@ def cast_frozen_bn_to_half(module):
     return module
 
 
-def train(cfg, local_rank, distributed, random_number_generator=None):
+def train(cfg, local_rank, distributed, writer, args, random_number_generator=None):
     if (torch._C, '_jit_set_profiling_executor') :
         torch._C._jit_set_profiling_executor(False)
     if (torch._C, '_jit_set_profiling_mode') :
@@ -225,7 +231,9 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
                 model=model,
                 distributed=distributed,
                 min_bbox_map=cfg.MLPERF.MIN_BBOX_MAP,
-                min_segm_map=cfg.MLPERF.MIN_SEGM_MAP)
+                min_segm_map=cfg.MLPERF.MIN_SEGM_MAP,
+                writer=writer,
+                args=args)
     else:
         per_iter_callback_fn = None
 
@@ -242,6 +250,8 @@ def train(cfg, local_rank, distributed, random_number_generator=None):
         arguments,
         cfg.DISABLE_REDUCED_LOGGING,
         iters_per_epoch,
+        writer,
+        args,
         per_iter_start_callback_fn=functools.partial(mlperf_log_epoch_start, iters_per_epoch=iters_per_epoch),
         per_iter_end_callback_fn=per_iter_callback_fn,
         scale=cfg.SOLVER.LR_SCALE,
@@ -281,7 +291,15 @@ def main():
         default=None,
         nargs=argparse.REMAINDER,
     )
-
+    parser.add_argument('--log_dir', default='/mnt/logs', type=str,
+                        help='log directory path.')
+    parser.add_argument('--label', type=str,
+                        help='label used to create log directory, '
+                             'by default should be time in seconds')
+    parser.add_argument('--bucket', type=str, default='mzanur-autoscaler',
+                        help='s3 bucket for tensorboard')
+    parser.add_argument('--arch', type=str, default='maskrcnn',
+                        help='model structure')
 
     args = parser.parse_args()
 
@@ -355,7 +373,9 @@ def main():
     # Initialise async eval
     init()
 
-    model, success = train(cfg, args.local_rank, args.distributed, random_number_generator)
+    writer = SummaryWriter(f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}')
+    model, success = train(cfg, args.local_rank, args.distributed, writer, args, random_number_generator)
+    writer.close()
 
     if success is not None:
         if success:
