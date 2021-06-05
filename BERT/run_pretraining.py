@@ -939,7 +939,9 @@ def main():
                         writer.flush()
                         if training_steps % 10: # push at a reduced rate #FIXME hardcoded
                             # update the tensorboard log in s3 bucket
-                            upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'BERT/{args.label}')
+                            res = upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'BERT/{args.label}')
+                            if not res:
+                                print("Failed to push to S3")
                         # reset average loss for next print loop
                         average_loss = 0
                     if adascale_step >= args.steps_this_run or training_steps % (

@@ -37,7 +37,7 @@ spec:
             emptyDir:
               medium: Memory
     Worker:
-      replicas: 3
+      replicas: 7
       restartPolicy: OnFailure
       template:
         spec:

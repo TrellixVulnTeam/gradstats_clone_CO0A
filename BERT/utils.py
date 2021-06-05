@@ -15,7 +15,9 @@ import torch
 import torch.distributed as dist
 import boto3
 from botocore.exceptions import ClientError
+from boto3.exceptions import S3UploadFailedError
 import os
+import logging
 
 
 from pathlib import Path
