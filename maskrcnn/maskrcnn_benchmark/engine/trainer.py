@@ -112,11 +112,7 @@ def do_train(
     synchronize()
     optimizer.zero_grad()
     step = 0 # adascale specific
-    epoch = 0
     for iteration, (images, targets) in enumerate(prefetcher(iter(data_loader)), start_iter):
-        if iteration // iters_per_epoch > epoch:
-            epoch += 1
-            data_loader.batch_sampler.batch_sampler.sampler.set_epoch(epoch)
         if per_iter_start_callback_fn is not None:
             per_iter_start_callback_fn(iteration=iteration)
 

@@ -24,9 +24,11 @@ class IterationBasedBatchSampler(BatchSampler):
             if hasattr(self.batch_sampler.sampler, "set_epoch"):
                 if self.random_number_generator is not None:
                     iteration_seed = self.random_number_generator.randint(0, 2 ** 32 - 1)
+
                     self.batch_sampler.sampler.set_epoch(iteration_seed)
                 else:
                     self.batch_sampler.sampler.set_epoch(iteration)
+                self.batch_sampler.sampler.set_epoch(iteration)
             for batch in self.batch_sampler:
                 iteration += 1
                 if iteration > self.num_iterations:
