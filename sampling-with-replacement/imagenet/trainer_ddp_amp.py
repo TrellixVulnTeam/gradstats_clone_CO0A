@@ -477,8 +477,10 @@ class data_prefetcher():
         return input, target
 
 
+global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
 def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
           args):
+    global global_step
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -501,7 +503,6 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
     images, target = prefetcher.next()
     i = 0
     adascale_step = 0
-    global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
     while images is not None:
         global_step += 1
         # `i` below will be progressed as per Adascale gain
