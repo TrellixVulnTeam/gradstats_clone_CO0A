@@ -59,10 +59,12 @@ def build_dataset(dataset_list, transforms, dataset_catalog, is_train=True):
     return [dataset], total_datasets_size
 
 
-def make_data_sampler(dataset, shuffle, distributed):
+def make_data_sampler(dataset, shuffle, distributed, is_train):
     if distributed:
-        # return samplers.DistributedSampler(dataset, shuffle=shuffle)
-        return samplers.ReplacementDistributedSampler(dataset, shuffle=shuffle)
+        if is_train:
+            return samplers.ReplacementDistributedSampler(dataset, shuffle=shuffle)
+        else:
+            return samplers.DistributedSampler(dataset, shuffle=shuffle)
 
     if shuffle:
         sampler = torch.utils.data.sampler.RandomSampler(dataset)
@@ -160,9 +162,8 @@ def make_data_loader(cfg, is_train=True, is_distributed=False, start_iter=0, ran
     datasets, epoch_size = build_dataset(dataset_list, transforms, DatasetCatalog, is_train)
 
     data_loaders = []
-    print(f'number of datasets is {len(datasets)}')
     for dataset in datasets:
-        sampler = make_data_sampler(dataset, shuffle, is_distributed)
+        sampler = make_data_sampler(dataset, shuffle, is_distributed, is_train)
         batch_sampler = make_batch_data_sampler(
             dataset, sampler, aspect_grouping, images_per_gpu, num_iters, start_iter, random_number_generator,
         )

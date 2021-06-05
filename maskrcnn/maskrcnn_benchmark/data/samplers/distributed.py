@@ -56,7 +56,6 @@ class DistributedSampler(Sampler):
         offset = self.num_samples * self.rank
         indices = indices[offset : offset + self.num_samples]
         assert len(indices) == self.num_samples
-
         return iter(indices)
 
     def __len__(self):
