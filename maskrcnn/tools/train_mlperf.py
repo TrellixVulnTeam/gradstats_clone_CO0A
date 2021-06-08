@@ -291,7 +291,7 @@ def main():
         default=None,
         nargs=argparse.REMAINDER,
     )
-    parser.add_argument('--log_dir', default='/mnt/logs', type=str,
+    parser.add_argument('--log_dir', default='/shared/logs', type=str,
                         help='log directory path.')
     parser.add_argument('--label', type=str,
                         help='label used to create log directory, '

@@ -208,9 +208,9 @@ def do_train(
                 )
             )
             # write tensorboard information to s3
-            writer.add_scalar('Gain/Gain', gain, step)
-            writer.add_scalar('GNS/GNS,', gns, step)
-            writer.add_scalar('Real Iterations/Real Iterations', iteration, step)
+            writer.add_scalar('Train/Gain', gain, step)
+            writer.add_scalar('Train/GNS,', gns, step)
+            writer.add_scalar('Train/Real Iterations', iteration, step)
             writer.add_scalar('Train/Total Loss,', losses, step)
             writer.add_scalar('Train/loss_classifier,', loss_dict['loss_classifier'], step)
             writer.add_scalar('Train/loss_box_reg,', loss_dict['loss_box_reg'], step)

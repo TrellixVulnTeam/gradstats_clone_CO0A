@@ -1,6 +1,6 @@
 MODEL:
   META_ARCHITECTURE: "GeneralizedRCNN"
-  WEIGHT: "/mnt/backbone/R-50.pkl"
+  WEIGHT: "/shared/pretrained_models/mrcnn/backbone/R-50.pkl"
   BACKBONE:
     CONV_BODY: "R-50-FPN"
     OUT_CHANNELS: 256
