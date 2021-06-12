@@ -356,7 +356,7 @@ def parse_arguments():
     parser.add_argument(
         '--phase1_end_step',
         type=int,
-        default=7038,
+        default=-1,
         help="Number of training steps in Phase1 - seq len 128")
 
     parser.add_argument('--init_loss_scale',
@@ -545,10 +545,13 @@ def prepare_model_and_optimizer(args, device):
 
         model.load_state_dict(checkpoint['model'], strict=False)
 
-        if args.phase2 and not args.init_checkpoint:
-            global_step -= args.phase1_end_step
-            # HACK FIXME: since after scaling we don't have a known value for phase1 end step we reset global step to 0
-            global_step = 0
+        if args.phase2:
+            if not args.init_checkpoint and args.phase1_end_step != -1:
+                global_step -= args.phase1_end_step
+            else:
+                # with AdaScale we don't have a known value for phase1 end step we reset global step to 0
+                global_step = 0
+                args.phase1_end_step = args.resume_step
 
         if is_main_process():
             print("resume step from ", args.resume_step)
@@ -884,6 +887,7 @@ def main():
                             args, scaler, optimizer, model, global_step)
 
                     if adascale_step >= args.steps_this_run or timeout_sent:
+                        print(adascale_step, args.steps_this_run, "@@@@@@@")
                         train_time_raw = time.time() - raw_train_start
                         last_num_steps = int(
                             training_steps /
@@ -901,18 +905,19 @@ def main():
                             dllogger.log(step=(
                                 epoch,
                                 global_step,
-                            ),
-                                         data={"final_loss": final_loss})
+                            ), data={"final_loss": final_loss})
+                        adascale_step += 1
                     elif training_steps % (
                             args.log_freq *
                             args.gradient_accumulation_steps) == 0:
                         average_loss /= (args.log_freq * divisor)
                         learning_rate = optimizer.param_groups[0]['lr']
- 
+
+                        if not args.use_adascale:
+                            gain = 1.0
+                            adascale_step = global_step # training_steps // args.gradient_accumulation_steps
+
                         if is_main_process():
-                            if not args.use_adascale:
-                                gain = 1.0
-                                adascale_step = global_step  # training_steps // args.gradient_accumulation_steps
                             dllogger.log(
                                 step=(
                                     epoch,
@@ -944,7 +949,7 @@ def main():
                                 print("Failed to push to S3")
                         # reset average loss for next print loop
                         average_loss = 0
-                    if adascale_step >= args.steps_this_run or training_steps % (
+                    if adascale_step > args.steps_this_run or training_steps % (
                             args.num_steps_per_checkpoint * args.
                             gradient_accumulation_steps) == 0 or timeout_sent:
                         if is_main_process() and not args.skip_checkpoint:
@@ -989,7 +994,7 @@ def main():
 
                         # Exiting the training due to hitting max steps, or being sent a
                         # timeout from the cluster scheduler
-                        if adascale_step >= args.steps_this_run or timeout_sent:
+                        if adascale_step > args.steps_this_run or timeout_sent:
                             del train_dataloader
                             # thread.join()
                             writer.close()
@@ -1029,4 +1034,3 @@ if __name__ == "__main__":
                          "raw_train_time": train_time_raw
                      })
     dllogger.flush()
-
