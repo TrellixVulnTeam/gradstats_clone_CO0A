@@ -7,7 +7,7 @@ export NCCL_DEBUG=INFO
 export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
-export OMP_NUM_THREADS=12
+export OMP_NUM_THREADS=96
 
 train_batch_size=${1:-32}
 learning_rate=${2:-"0.1"}
@@ -16,7 +16,7 @@ num_gpus=${4:-8}
 resume_training=${5:-"false"}
 NHWC=${6:-"--channels-last"}
 ARCH=${7:-"resnet50"}
-NUM_WORKERS=${8:-2}
+NUM_WORKERS=${8:-12}
 TOTAL_EPOCHS=${9:-90}
 create_logfile="true"
 DATA_DIR="/shared/benchmarking_datasets/imagenet/processed"
