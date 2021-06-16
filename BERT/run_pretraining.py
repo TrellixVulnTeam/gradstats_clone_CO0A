@@ -724,7 +724,7 @@ def main():
         adascale_step = 0
         accumulate_gradients = args.gradient_accumulation_steps > 1
 
-        pool = ProcessPoolExecutor(1)
+        pool = ProcessPoolExecutor(12)
 
         # Note: We loop infinitely over epochs, termination is handled via iteration count
         while True:
@@ -942,7 +942,8 @@ def main():
                         writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
                         writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
                         writer.flush()
-                        if training_steps % 10: # push at a reduced rate #FIXME hardcoded
+                        # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
+                        if training_steps % 10 == 0:
                             # update the tensorboard log in s3 bucket
                             res = upload_dir(f'{args.log_dir}/{args.label}', args.bucket, f'BERT/{args.label}')
                             if not res:

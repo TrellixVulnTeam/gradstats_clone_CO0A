@@ -20,7 +20,7 @@ export NCCL_DEBUG=INFO
 export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
-export OMP_NUM_THREADS=12
+export OMP_NUM_THREADS=96
 
 # 128K GBS settings - note these hps are the same as 64K except we either double the world size or double the train batch size by doubling accum steps and set lr scale
 # for example, train bs for phase 1 is 4096 with 32 gpus  or 2048 with 64 gpus

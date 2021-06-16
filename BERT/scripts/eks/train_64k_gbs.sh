@@ -20,7 +20,7 @@ export NCCL_DEBUG=INFO
 export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
-export OMP_NUM_THREADS=12
+export OMP_NUM_THREADS=96
 
 # 64K batch settings for 64 GPUs
 train_batch_size=${1:-1024}
