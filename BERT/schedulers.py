@@ -126,10 +126,43 @@ class PolyWarmUpScheduler(LRScheduler):
     def get_lr(self):
         progress = self.last_epoch / self.total_steps
         if progress < self.warmup:
+            warmup_percentage_completion = progress / self.warmup
             if self.do_poly_warmup:
-                return [base_lr * (progress / self.warmup) ** self.degree for base_lr in self.base_lrs]
+                return [base_lr * warmup_percentage_completion ** self.degree for base_lr in self.base_lrs]
             else:
-                return [base_lr * progress / self.warmup for base_lr in self.base_lrs]
+                return [base_lr * warmup_percentage_completion for base_lr in self.base_lrs]
         else:
-            return [base_lr * ((1.0 - progress) ** self.degree) for base_lr in self.base_lrs]
+            percent_remaining = (1.0 - progress)/(1.0 - self.warmup)
+            return [base_lr * (percent_remaining ** self.degree) for base_lr in self.base_lrs]
 
+
+# import torch
+# from torch import nn
+# 
+# class NeuralNetwork(nn.Module):
+#     def __init__(self):
+#         super(NeuralNetwork, self).__init__()
+#         self.flatten = nn.Flatten()
+#         self.linear_relu_stack = nn.Sequential(
+#             nn.Linear(28*28, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 10),
+#             nn.ReLU()
+#         )
+# 
+#     def forward(self, x):
+#         x = self.flatten(x)
+#         logits = self.linear_relu_stack(x)
+#         return logits
+# 
+# 
+# if __name__ == "__main__":
+#     model = NeuralNetwork()
+#     opt = torch.optim.Adam(model.parameters(), lr=1.0)
+#     sched = PolyWarmUpScheduler(opt, warmup=0.25, total_steps=1000, degree=2, do_poly_warmup=True)
+#     for i in range(1000):
+#         print(sched.get_lr()[0])
+#         opt.param_groups[0]['step'] = i
+#         sched.step()
