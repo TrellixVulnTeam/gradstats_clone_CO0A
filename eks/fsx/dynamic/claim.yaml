@@ -8,4 +8,4 @@ spec:
   storageClassName: fsx-sc
   resources:
     requests:
-      storage: 4800Gi
+      storage: 14400Gi

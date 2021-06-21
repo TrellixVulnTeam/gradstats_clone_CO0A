@@ -17,7 +17,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs_4node.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8
@@ -37,7 +37,7 @@ spec:
             emptyDir:
               medium: Memory
     Worker:
-      replicas: 7
+      replicas: 3
       restartPolicy: OnFailure
       template:
         spec:
@@ -49,7 +49,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs_4node.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8

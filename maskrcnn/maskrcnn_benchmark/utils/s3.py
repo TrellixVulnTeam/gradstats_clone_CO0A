@@ -1,6 +1,10 @@
 import logging
 import boto3
 from botocore.exceptions import ClientError
+<<<<<<< HEAD
+=======
+from boto3.exceptions import S3UploadFailedError
+>>>>>>> b0843ced252f9a6256249330ef429b1d1b596906
 import os
 
 def upload_dir(file_dir, bucket, s3_prefix):
@@ -20,7 +24,7 @@ def upload_dir(file_dir, bucket, s3_prefix):
                 response = s3_client.upload_file(f'{file_dir}/{worker_folder}/{file_name}',
                                                  bucket,
                                                  f'{s3_prefix}/{worker_folder}/{file_name}')
-            except ClientError as e:
+            except (S3UploadFailedError, ClientError) as e:
                 logging.error(e)
                 return False
     return True

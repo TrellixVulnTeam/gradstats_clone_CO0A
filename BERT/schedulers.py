@@ -114,22 +114,60 @@ class PolyWarmUpScheduler(LRScheduler):
         self.degree = degree
         super(PolyWarmUpScheduler, self).__init__(optimizer, last_epoch)
 
-    def step(self, epoch=None):
+
+    def step(self, epoch=None, step_increment=1):
+        """
+        For adascale case step_increment will correspond to floor(gain)
+        """
         param_group = self.optimizer.param_groups[0]
         if 'step' in param_group:
-            self.last_epoch = param_group['step'] + 1
+            self.last_epoch = param_group['step'] + step_increment
         else:
             self.last_epoch = 1
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
+
     def get_lr(self):
         progress = self.last_epoch / self.total_steps
         if progress < self.warmup:
+            warmup_percentage_completion = progress / self.warmup
             if self.do_poly_warmup:
-                return [base_lr * (progress / self.warmup) ** self.degree for base_lr in self.base_lrs]
+                return [base_lr * warmup_percentage_completion ** self.degree for base_lr in self.base_lrs]
             else:
-                return [base_lr * progress / self.warmup for base_lr in self.base_lrs]
+                return [base_lr * warmup_percentage_completion for base_lr in self.base_lrs]
         else:
-            return [base_lr * ((1.0 - progress) ** self.degree) for base_lr in self.base_lrs]
+            percent_remaining = (1.0 - progress)/(1.0 - self.warmup)
+            return [base_lr * (percent_remaining ** self.degree) for base_lr in self.base_lrs]
 
+
+# import torch
+# from torch import nn
+# 
+# class NeuralNetwork(nn.Module):
+#     def __init__(self):
+#         super(NeuralNetwork, self).__init__()
+#         self.flatten = nn.Flatten()
+#         self.linear_relu_stack = nn.Sequential(
+#             nn.Linear(28*28, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 512),
+#             nn.ReLU(),
+#             nn.Linear(512, 10),
+#             nn.ReLU()
+#         )
+# 
+#     def forward(self, x):
+#         x = self.flatten(x)
+#         logits = self.linear_relu_stack(x)
+#         return logits
+# 
+# 
+# if __name__ == "__main__":
+#     model = NeuralNetwork()
+#     opt = torch.optim.Adam(model.parameters(), lr=1.0)
+#     sched = PolyWarmUpScheduler(opt, warmup=0.25, total_steps=1000, degree=2, do_poly_warmup=True)
+#     for i in range(1000):
+#         print(sched.get_lr()[0])
+#         opt.param_groups[0]['step'] = i
+#         sched.step()

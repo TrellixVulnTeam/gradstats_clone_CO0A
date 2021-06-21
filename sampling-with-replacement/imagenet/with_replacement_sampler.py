@@ -5,7 +5,6 @@ import torch
 from torch.utils.data.distributed import DistributedSampler, Sampler, Dataset
 import torch.distributed as dist
 
-
 T_co = TypeVar('T_co', covariant=True)
 
 
@@ -45,22 +44,26 @@ class ReplacementDistributedSampler(DistributedSampler):
         ...         sampler.set_epoch(epoch)
         ...     train(loader)
     """
-
-    def __init__(self, dataset: Dataset, num_replicas: Optional[int] = None,
-                 rank: Optional[int] = None, shuffle: bool = True,
-                 seed: int = 0, drop_last: bool = False) -> None:
+    def __init__(self,
+                 dataset: Dataset,
+                 num_replicas: Optional[int] = None,
+                 rank: Optional[int] = None,
+                 shuffle: bool = True,
+                 seed: int = 0,
+                 drop_last: bool = False) -> None:
         if num_replicas is None:
             if not dist.is_available():
-                raise RuntimeError("Requires distributed package to be available")
+                raise RuntimeError(
+                    "Requires distributed package to be available")
             num_replicas = dist.get_world_size()
         if rank is None:
             if not dist.is_available():
-                raise RuntimeError("Requires distributed package to be available")
+                raise RuntimeError(
+                    "Requires distributed package to be available")
             rank = dist.get_rank()
         if rank >= num_replicas or rank < 0:
-            raise ValueError(
-                "Invalid rank {}, rank should be in the interval"
-                " [0, {}]".format(rank, num_replicas - 1))
+            raise ValueError("Invalid rank {}, rank should be in the interval"
+                             " [0, {}]".format(rank, num_replicas - 1))
         self.dataset = dataset
         self.num_replicas = num_replicas
         self.rank = rank
@@ -68,13 +71,15 @@ class ReplacementDistributedSampler(DistributedSampler):
         self.drop_last = drop_last
         # If the dataset length is evenly divisible by # of replicas, then there
         # is no need to drop any data, since the dataset will be split equally.
-        if self.drop_last and len(self.dataset) % self.num_replicas != 0:  # type: ignore[arg-type]
+        if self.drop_last and len(
+                self.dataset
+        ) % self.num_replicas != 0:  # type: ignore[arg-type]
             # Split to nearest available length that is evenly divisible.
             # This is to ensure each rank receives the same amount of data when
             # using this Sampler.
             # self.num_samples = math.ceil(
-                # `type:ignore` is required because Dataset cannot provide a default __len__
-                # see NOTE in pytorch/torch/utils/data/sampler.py
+            # `type:ignore` is required because Dataset cannot provide a default __len__
+            # see NOTE in pytorch/torch/utils/data/sampler.py
             #     (len(self.dataset) - self.num_replicas) / self.num_replicas  # type: ignore[arg-type]
             # )
             self.num_samples = len(self.dataset) - self.num_replicas
@@ -91,11 +96,13 @@ class ReplacementDistributedSampler(DistributedSampler):
             g = torch.Generator()
             # g.manual_seed(self.seed + self.epoch)
             g.manual_seed(self.seed + self.rank + self.epoch)
-            indices = torch.randperm(len(self.dataset), generator=g).tolist()  # type: ignore[arg-type]
-            print(f"epoch is {self.epoch}, seed is {self.seed}, rank is {self.rank}, \n"
-                  f"dataset total_size is {self.total_size}, indices len is {len(indices)}, \n"
-                  f"first 10 indices of current dataloader are \n "
-                  f"{indices[:10]}")
+            indices = torch.randperm(len(
+                self.dataset), generator=g).tolist()  # type: ignore[arg-type]
+            print(
+                f"epoch is {self.epoch}, seed is {self.seed}, rank is {self.rank}, \n"
+                f"dataset total_size is {self.total_size}, indices len is {len(indices)}, \n"
+                f"first 10 indices of current dataloader are \n "
+                f"{indices[:10]}")
         else:
             indices = list(range(len(self.dataset)))  # type: ignore[arg-type]
 
@@ -105,7 +112,9 @@ class ReplacementDistributedSampler(DistributedSampler):
             if padding_size <= len(indices):
                 indices += indices[:padding_size]
             else:
-                indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
+                indices += (
+                    indices *
+                    math.ceil(padding_size / len(indices)))[:padding_size]
         else:
             # remove tail of data to make it evenly divisible.
             indices = indices[:self.total_size]

@@ -14,10 +14,13 @@
 
 import os
 
+import math
 import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+
+from fairscale.optim import AdaScale
 from apex.optimizers import FusedAdam, FusedSGD
 from monai.inferers import sliding_window_inference
 from skimage.transform import resize

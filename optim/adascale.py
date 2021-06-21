@@ -92,7 +92,7 @@ class AdaScale(Optimizer):
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
         self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
         self._use_preconditioner = use_preconditioner
-        self.summary_writer = summary_writer 
+        self.summary_writer = summary_writer #TODO: start pushing per worker gradstats to tensorboard
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -125,7 +125,6 @@ class AdaScale(Optimizer):
         self._scaler = scaler
         # Adding for O2 level of AMP
         self.state = self._optimizer.state
-        self.local_grad_sqr = None
 
     def _hook(self) -> None:
         """ Internal function to register the gradient hooks.
@@ -309,9 +308,6 @@ class AdaScale(Optimizer):
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
         gain = (var + sqr) / (var / max_scale + sqr)
-        # for tensorboard
-        self.var = var
-        self.sqr = sqr
         return gain
 
 
@@ -331,10 +327,9 @@ class AdaScale(Optimizer):
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
-#        if sqr == 0.0:
-#            return 0.0 # AS: should not be zero - remove check in the future
+        if sqr == 0.0:
+            return 0.0 # AS: should not be zero - remove check in the future
         gns = scale_one_batch_size * var / sqr
-        # TODO: clip GNS for upper limit
         return gns
 
 
@@ -382,9 +377,8 @@ class AdaScale(Optimizer):
         # unscale grads before computing squares - else numbers blow up with scale
         curr_loss_scale_squared = self._current_loss_scale()**2
         preconditioner = self._calculate_preconditioner(pg_idx, param)
-        divisor = preconditioner * curr_loss_scale_squared
-        norm = torch.nan_to_num(torch.linalg.norm(grad.div(divisor)))
-        return norm * norm
+        norm = torch.linalg.norm(grad.div(preconditioner))
+        return norm * norm / curr_loss_scale_squared
 
 
     def _total_grad_sqr(self):
@@ -394,13 +388,9 @@ class AdaScale(Optimizer):
 
         for pg_idx, param_group in enumerate(self._optimizer.param_groups):
             for param in param_group["params"]:
-                # we are going to exclude missing or NaN values in gradients - note avoiding setting NaN to 0.0
-                if param.grad is None or torch.any(torch.isnan(param.grad)):
+                if param.grad is None:
                     continue
                 total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
-        # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
-        # but just the piece that computes stats
-        total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
         return total_grad_sqr
 
 
@@ -469,12 +459,6 @@ class AdaScale(Optimizer):
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.
         work = None
-        # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
-        # but just the piece that computes stats
-        self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
-        # for tensorboard
-        self.local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
-
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
@@ -491,16 +475,13 @@ class AdaScale(Optimizer):
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
-        # save as object variable only for Tensorboard logging
-        self.total_grad_sqr = total_grad_sqr
-
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
         #
         # local_grad_sqr is \sum_{i=1}^{c N} \norm{g_t_i}^2
         # where N is world size and c is num_grads_to_accum
         # total_grad_sqr is \norm{\bar{g}_t}^2
- 
+        
         # adjusting stats for original formula
         if not self._adjust_grads_for_accumulation:
             local_grad_sqr = self._num_grads_to_accum * self._num_grads_to_accum * local_grad_sqr
@@ -526,9 +507,6 @@ class AdaScale(Optimizer):
             print('gradient inf/nan skipping update of moving averages of grad moments')
             self._gain_invalid = True
         else:
-            # for tensorboard
-            self.nonsmooth_var = grad_var
-            self.nonsmooth_sqr = grad_sqr
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
 

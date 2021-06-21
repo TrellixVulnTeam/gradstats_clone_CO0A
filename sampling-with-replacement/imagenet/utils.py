@@ -33,5 +33,10 @@ def is_global_rank_zero():
         return True
     return False
 
+def make_path_if_not_exists(dirpath):
+    if not os.path.exists(dirpath):
+        os.makedirs(dirpath, exist_ok=True)
+        print(f"{dirpath} created")
+
 # if __name__ == "__main__":
 #     upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')

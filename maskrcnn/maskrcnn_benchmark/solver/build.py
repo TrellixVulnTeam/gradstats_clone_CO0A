@@ -72,7 +72,11 @@ def make_optimizer(cfg, model, use_adascale=False, enable_gns=False):
         if cfg.SOLVER.GNS_SMOOTHING > 0.0:
             smoothing = cfg.SOLVER.GNS_SMOOTHING
             assert smoothing <= 1.0, "Smoothing should be a positive float less than 1.0"
-        optimizer = AdaScale(optimizer, rank=get_rank(), is_adaptive=(cfg.SOLVER.OPTIMIZER != "SGD" and cfg.SOLVER.OPTIMIZER != "SGDW"), smoothing=smoothing)
+        optimizer = AdaScale(optimizer,
+                             rank=get_rank(),
+                             is_adaptive=(cfg.SOLVER.OPTIMIZER != "SGD" and cfg.SOLVER.OPTIMIZER != "SGDW"),
+                             smoothing=smoothing,
+                             summary_writer=None) #TODO: pass writer for detailed grad stats
 
     return optimizer
 

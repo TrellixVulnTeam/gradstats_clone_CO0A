@@ -179,6 +179,14 @@ def get_main_args(strings=None):
         default="train",
         help="Execution mode to run the model",
     )
+    arg('--enable_gns',
+        default=False,
+        action='store_true',
+        help='Enable gradient noise scale measurement for training run')
+    arg('--gns_smoothing',
+        type=float,
+        default=0.0,
+        help='Smoothing factor for gradient stats.')
     arg("--data", type=str, default="/data", help="Path to data directory")
     arg("--results", type=str, default="/results", help="Path to results directory")
     arg("--logname", type=str, default=None, help="Name of dlloger output")

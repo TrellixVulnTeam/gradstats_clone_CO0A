@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "bert-adascale-128k-bs-job"
+  name: "bert-training-64k-bs-job"
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -17,7 +17,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/train_64k_gbs.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8
@@ -49,7 +49,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/train_64k_gbs.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8

@@ -16,7 +16,8 @@ import os
 
 import pyprof
 import torch
-from pytorch_lightning import Trainer, seed_everything
+from adascale_trainer import AdaTrainer
+from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 
 from data_loading.data_module import DataModule
@@ -24,6 +25,7 @@ from models.nn_unet import NNUnet
 from utils.gpu_affinity import set_affinity
 from utils.logger import LoggingCallback
 from utils.utils import get_main_args, is_main_process, log, make_empty_dir, set_cuda_devices, verify_ckpt_path
+
 
 if __name__ == "__main__":
     args = get_main_args()
@@ -69,7 +71,7 @@ if __name__ == "__main__":
         else:
             model = NNUnet(args)
 
-    trainer = Trainer(
+    trainer = AdaTrainer(
         logger=False,
         gpus=args.gpus,
         precision=16 if args.amp else 32,

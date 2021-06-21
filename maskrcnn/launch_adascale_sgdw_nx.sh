@@ -4,13 +4,13 @@ MAX_ITER=45000
 WARMUP_FACTOR=0.000096
 WARMUP_ITERS=500
 # TODO: adjust train ims per batch based on LR scale 
-TRAIN_IMS_PER_BATCH=64
-TEST_IMS_PER_BATCH=32
+TRAIN_IMS_PER_BATCH=256
+TEST_IMS_PER_BATCH=64
 WEIGHT_DECAY=1e-3
 NSOCKETS_PER_NODE=2
 NCORES_PER_SOCKET=24
 # in EKS we have 1 GPU per "worker/virtual node"
-NPROC_PER_NODE=1
+NPROC_PER_NODE=8
 LR_SCHEDULE="COSINE"
 LR_SCALE=${1:-"1.0"}
 OUTPUT_DIR=${2:-"."}
@@ -30,6 +30,7 @@ python -m torch.distributed.launch \
  --master_addr=${MASTER_ADDR} \
  --master_port=${MASTER_PORT} \
  tools/train_mlperf.py --config-file 'configs/e2e_mask_rcnn_R_50_FPN_1x_giou_sgd_ls.yaml' \
+ --label "mrcnn_${LR_SCALE}" \
  PATHS_CATALOG 'maskrcnn_benchmark/config/paths_catalog.py' \
  OUTPUT_DIR ${OUTPUT_DIR} \
  DISABLE_REDUCED_LOGGING True \

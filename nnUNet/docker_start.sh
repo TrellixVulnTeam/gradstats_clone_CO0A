@@ -6,6 +6,6 @@ docker run --rm -it -d --gpus all \
                     --net=host --uts=host --ipc=host \
                     --ulimit stack=67108864 --ulimit memlock=-1 \
                     --security-opt seccomp=unconfined \
-		    -v $(pwd):/mnt \
+		    -v /home/ubuntu/gradstats:/mnt \
                     -v /home/ubuntu/data:/data \
                     $CONTAINER_IMAGE

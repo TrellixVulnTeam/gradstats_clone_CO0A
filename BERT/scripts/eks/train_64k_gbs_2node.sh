@@ -22,10 +22,8 @@ export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
 export OMP_NUM_THREADS=96
 
-# 128K GBS settings - note these hps are the same as 64K except we either double the world size or double the train batch size by doubling accum steps and set lr scale
-# for example, train bs for phase 1 is 4096 with 32 gpus  or 2048 with 64 gpus
-# in order to fill up gpu mem - we do batch size per gpu // reduced grad accumulation
-train_batch_size=${1:-2048}
+# 64K batch settings for 16 GPUs
+train_batch_size=${1:-4096}
 learning_rate=${2:-"1.3653e-3"}
 adamw_beta1=0.952378
 adamw_beta2=0.86471
@@ -40,35 +38,32 @@ save_checkpoint_steps=${7:-500}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-16}
+gradient_accumulation_steps=${11:-64}
 seed=${12:-12439}
 job_name=${13:-"bert_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"true"}
-#allreduce_post_accumulation_fp16=${15:-"true"}
-train_batch_size_phase2=${16:-1024}
+train_batch_size_phase2=${16:-2048}
 learning_rate_phase2=${17:-"6.1951e-5"}
 adamw_phase2_beta1=0.65322
 adamw_phase2_beta2=0.82451
 adamw_phase2_weight_decay=0.19891
-#warmup_proportion_phase2=${18:-"0.5"}
-warmup_proportion_phase2=${18:-"0.25"}
-#train_steps_phase2=${19:-781}
-train_steps_phase2=${19:-1563}
-gradient_accumulation_steps_phase2=${20:-64}
+warmup_proportion_phase2=${18:-"0.5"}
+train_steps_phase2=${19:-781}
+gradient_accumulation_steps_phase2=${20:-256}
 sampling_with_replacement=${21:-"true"}
-DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
-DATA_DIR_PHASE1=/shared/benchmarking_datasets/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
+DATASET=books_wiki_en_corpus
+DATA_DIR_PHASE1=/shared/PFL_datasets/nlp/BERT/phase1/ 
 BERT_CONFIG=/gradstats/BERT/bert_base_config.json
-DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
-DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
+DATASET2=books_wiki_en_corpus 
+DATA_DIR_PHASE2=/shared/PFL_datasets/nlp/BERT/phase2/ 
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/2x/
+RESULTS_DIR=/shared/export/BERT/1x_2node/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
- 
+
 mkdir -p $CHECKPOINTS_DIR
- 
- 
+
+
 if [ ! -d "$DATA_DIR_PHASE1" ] ; then
    echo "Warning! $DATA_DIR_PHASE1 directory missing. Training cannot start"
 fi
@@ -150,10 +145,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-CMD+=" --enable_gns"
-CMD+=" --use_adascale"
-CMD+=" --lr_scale=2.0"
-CMD+=" --gns_smoothing=0.25"
+#CMD+=" --enable_gns"
+#CMD+=" --use_adascale"
+#CMD+=" --lr_scale=2.0"
+#CMD+=" --gns_smoothing=0.25"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -164,7 +159,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_128k "
+CMD+=" --label bert_training_64k_2node "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -256,10 +251,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-CMD+=" --enable_gns"
-CMD+=" --use_adascale"
-CMD+=" --lr_scale=2.0"
-CMD+=" --gns_smoothing=0.25"
+#CMD+=" --enable_gns"
+#CMD+=" --use_adascale"
+#CMD+=" --lr_scale=2.0"
+#CMD+=" --gns_smoothing=0.25"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -271,7 +266,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train --phase2 --resume_from_checkpoint " 
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_128k "
+CMD+=" --label bert_training_64k_2node "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 
