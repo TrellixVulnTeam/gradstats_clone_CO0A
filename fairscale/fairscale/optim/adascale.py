@@ -6,7 +6,6 @@ import torch
 from torch.autograd import Variable
 import torch.distributed as dist
 from torch.optim import SGD, Optimizer
-from copy import deepcopy
 
 from apex import amp
 
@@ -28,56 +27,6 @@ class AdaScale(Optimizer):
     This class subclasses `Optimizer` so that `torch.optim.lr_scheduler` can
     work with it. In other words, AdaScale is intended to be a complete wrapper of an
     torch Optimizer.
-
-    Note that, AdaScale does _not_ help increase per-GPU batch size.
-
-    There are several ways to integrate AdaScale with your training loop.
-    We show two examples below.
-
-    Example 1: using PyTorch's `lr_scheduler` classes.
-
-    .. code-block:: python
-
-        optim = AdaScale(SGD(model.parameters(), lr=0.001))
-        model = DistributedDataParallel(model)
-        scheduler = LambdaLR(optim, lr_lambda=...)
-
-        last_epoch = 0
-        done = False
-        step = 0
-        while True:
-            for batch in dataset:
-                optim.zero_grad()
-                logits = model()
-                loss = criterion(logits, ...)
-                loss.backward()
-                step += optim.gain()
-                optim.step()
-                epoch = step // len(dataset)
-                if epoch > last_epoch:
-                    scheduler.step()
-                    last_epoch = epoch
-                if epoch >= max_epochs:
-                    done = True
-
-    Example 2: using a custom `update_lr()` function that update the learning
-    rate based on the current step count per epoch.
-
-    .. code-block:: python
-
-        optim = AdaScale(SGD(model.parameters(), lr=0.001))
-        model = DistributedDataParallel(model)
-
-        step = 0
-        while step < max_steps:
-            for batch in ...:
-                optim.zero_grad()
-                logits = model()
-                loss = criterion()
-                loss.backward()
-                step += optim.gain()
-                optim.step()
-                update_lr(step)
 
     Args:
         optimizer (torch.optim.Optimizer):
@@ -143,7 +92,7 @@ class AdaScale(Optimizer):
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
         self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
         self._use_preconditioner = use_preconditioner
-        self.summary_writer = summary_writer #TODO: start pushing per worker gradstats to tensorboard
+        self.summary_writer = summary_writer 
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -176,6 +125,7 @@ class AdaScale(Optimizer):
         self._scaler = scaler
         # Adding for O2 level of AMP
         self.state = self._optimizer.state
+        self.local_grad_sqr = None
 
     def _hook(self) -> None:
         """ Internal function to register the gradient hooks.
@@ -359,6 +309,9 @@ class AdaScale(Optimizer):
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
         gain = (var + sqr) / (var / max_scale + sqr)
+        # for tensorboard
+        self.var = var
+        self.sqr = sqr
         return gain
 
 
@@ -378,9 +331,10 @@ class AdaScale(Optimizer):
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
-        if sqr == 0.0:
-            return 0.0 # AS: should not be zero - remove check in the future
+#        if sqr == 0.0:
+#            return 0.0 # AS: should not be zero - remove check in the future
         gns = scale_one_batch_size * var / sqr
+        # TODO: clip GNS for upper limit
         return gns
 
 
@@ -424,6 +378,32 @@ class AdaScale(Optimizer):
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
 
 
+    def _get_norm_squared(self, pg_idx, param, grad):
+        # unscale grads before computing squares - else numbers blow up with scale
+        curr_loss_scale_squared = self._current_loss_scale()**2
+        preconditioner = self._calculate_preconditioner(pg_idx, param)
+        divisor = preconditioner * curr_loss_scale_squared
+        norm = torch.nan_to_num(torch.linalg.norm(grad.div(divisor)))
+        return norm * norm
+
+
+    def _total_grad_sqr(self):
+        curr_loss_scale = self._current_loss_scale()
+        # colocate total sqr with local sqr tensor
+        total_grad_sqr = torch.zeros_like(self._local_grad_sqr)
+
+        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+            for param in param_group["params"]:
+                # we are going to exclude missing or NaN values in gradients - note avoiding setting NaN to 0.0
+                if param.grad is None or torch.any(torch.isnan(param.grad)):
+                    continue
+                total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
+        # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
+        # but just the piece that computes stats
+        total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
+        return total_grad_sqr
+
+
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
@@ -432,36 +412,25 @@ class AdaScale(Optimizer):
         if torch.sum(torch.isnan(grad)) or torch.sum(torch.isinf(grad)):
             grads_are_invalid = True
 
-        # Store the local gradient square sums in a vector.
+        # Store the local gradient square sums in a tensor colocated with grad
         # This vector is also used for error checking. Whenever it is not None,
         # it means that we are in backward pass.
-        debug = False
         if self._local_grad_sqr is None:
-            self._local_grad_sqr = torch.zeros(
-                len(self._optimizer.param_groups), device=grad.device, requires_grad=False,
-            )
-            debug = True
+            self._local_grad_sqr = torch.zeros(len(self._optimizer.param_groups),
+                                                device=grad.device,
+                                                requires_grad=False,
+                                                dtype=torch.float64)
 
         # we want accum copies of local_grad_sqr per worker 
-        # unscale grads before computing squares - else numbers blow up with scale
-        grad_clone = grad.detach().clone()
-        curr_loss_scale = self._current_loss_scale() 
-        grad_clone.div_(curr_loss_scale)
         if not grads_are_invalid:
-            # Get the preconditioning matrix for the optimizer
-            preconditioner = self._calculate_preconditioner(pg_idx, param)
-            self._local_grad_sqr[pg_idx] += grad_clone.div_(preconditioner).pow(2).sum()
-
-            # if self._rank == 0 and debug:
-            #     #print("grad_clone", grad_clone)
-            #     print("<<<<<<<<<<<<<<<", self._local_grad_sqr[pg_idx], ">>>>>>>>>>>>>>>")
-            #     debug = False
+            self._local_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, grad) 
 
         # Now, ensure we queue a callback at the end of the callback queue.
         # This will fire after all gradient callbacks are done (esp. those
         # queued by DDP.
         self._final_callback_queued = False
         Variable._execution_engine.queue_callback(self._queue_callback)
+
 
 
     def _queue_callback(self) -> None:
@@ -497,45 +466,33 @@ class AdaScale(Optimizer):
             assert self._local_grad_sqr is not None, "We should still be in backward phase"
             return
 
-        # Since self._local_grad_sqr is FP32, sum shouldn't overflow.
         # This vector has length of # of param_groups, so it is small, but we
         # use async to hide the all_reduce latency, esp when # of nodes is large.
         work = None
+        # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
+        # but just the piece that computes stats
+        self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
+        # for tensorboard
+        self.local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
+
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
-        curr_loss_scale = self._current_loss_scale() 
-
-        # Compute the sums of squares for reduced gradients.
-        # Divide by _num_grads_to_accum since the gradients are accumulated.
-        grads = []
-        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
-            grads.append([])
-            for param in param_group["params"]:
-                preconditioner = self._calculate_preconditioner(pg_idx, param, where="total")
-                if param.grad is None:
-                    grads[-1].append(0.0)
-                    continue
-                grad = param.grad.detach().clone() # copy
-                grad.div_(curr_loss_scale).div_(preconditioner)
-                sq_val = grad.pow(2).sum().item()
-                grads[-1].append(sq_val)
-        total_grad_sqr = np.array([sum(gg) for gg in grads]) # number of entries same as groups
-
+        total_grad_sqr = self._total_grad_sqr()
         # Divide by (_num_grads_to_accum ** 2) to account for gradient
         # accumulation. Note that sometimes this factor is already taken care of in
         # loss calculation, so we do not need to adjust for accumulation divisor
         if self._num_grads_to_accum > 1 and self._adjust_grads_for_accumulation:
-            # np array doesn't support /=.
             total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
 
+        total_grad_sqr = total_grad_sqr.cpu().numpy()
         # Wait for all_reduce to be done and move it to cpu & np.
         if work:
             work.wait()
         local_grad_sqr = self._local_grad_sqr.cpu().numpy()
 
-        # if self._rank == 0:
-        #     print("local", self._local_grad_sqr, "total:", total_grad_sqr, "loss_scale:", curr_loss_scale)
+        # save as object variable only for Tensorboard logging
+        self.total_grad_sqr = total_grad_sqr
 
         # See appendix B.3 of the paper.
         # Modified to handle cases where scale != world_size
@@ -543,12 +500,10 @@ class AdaScale(Optimizer):
         # local_grad_sqr is \sum_{i=1}^{c N} \norm{g_t_i}^2
         # where N is world size and c is num_grads_to_accum
         # total_grad_sqr is \norm{\bar{g}_t}^2
-        
-        ########################
+ 
         # adjusting stats for original formula
         if not self._adjust_grads_for_accumulation:
             local_grad_sqr = self._num_grads_to_accum * self._num_grads_to_accum * local_grad_sqr
-        ########################
 
         S = self._scale
         # AS: accum taken care of during loss calc - here we have `num workers` copies of local_sqr and 
@@ -571,6 +526,9 @@ class AdaScale(Optimizer):
             print('gradient inf/nan skipping update of moving averages of grad moments')
             self._gain_invalid = True
         else:
+            # for tensorboard
+            self.nonsmooth_var = grad_var
+            self.nonsmooth_sqr = grad_sqr
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
 
@@ -709,12 +667,15 @@ class AdaScale(Optimizer):
             self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
 
 
-    # from openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
-    # components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
-    # in case of ADAM - note that averages won't be very useful until we have done 1/(1-beta2) batches, so we
-    # ignore batch size predictions initially
-    # Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
     def _calculate_preconditioner(self, pg_idx, param, where="local"):
+        """
+        From openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
+        components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
+        in case of ADAM - note that averages won't be very useful until we have done 1/(1-beta2) batches, so we
+        ignore batch size predictions initially
+        Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
+        TODO: Investigate other preconditioners
+        """
         if not self._use_preconditioner:
             return torch.ones_like(param, memory_format=torch.preserve_format)
         else:
@@ -732,4 +693,3 @@ class AdaScale(Optimizer):
             bias_correction = 1 - beta2 ** step
             pinv = (exp_avg_sq / bias_correction).sqrt().add_(eps)
             return pinv
-

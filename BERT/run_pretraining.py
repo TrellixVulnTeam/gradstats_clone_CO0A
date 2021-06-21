@@ -671,8 +671,9 @@ def prepare_model_and_optimizer(args, device):
 def take_optimizer_step(args, scaler, optimizer, model, global_step):
     if args.allreduce_post_accumulation:
         if args.enable_gns or args.use_adascale:
-            optimizer.step(
-            )  # optimizer is adascale wrapped and we pass scaler as an argument to get loss scale
+            # optimizer is adascale wrapped and we pass scaler as an argument
+            # to get loss scale
+            optimizer.step()  
         else:
             scaler.step(optimizer)
         # update scaler state machine
@@ -871,23 +872,22 @@ def main():
                         ####### GNS/ADASCALE METRICS #########
                         gns = 0.0
                         if args.enable_gns:
-                            gns = optimizer.gns(scale_one_batch_size=65536)
+                            gns = optimizer.gns(scale_one_batch_size=65536) # FIXME hardcoded
                         if args.use_adascale:
-                            gain = optimizer.scale_invariant_steps(
-                                aggressive_base_schedule=False)
+                            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
                             prev_steps = math.floor(adascale_step)
                             adascale_step = adascale_step + gain
                             new_steps = math.floor(adascale_step)
                             scale_invariant_steps = new_steps - prev_steps
-                            for _ in range(scale_invariant_steps):
-                                lr_scheduler.step()  # step based scheduler
+                            lr_scheduler.step(step_increment=scale_invariant_steps)
+                            # progress optimizer state so that scheduler 'step' updates count correctly
+                            # HACK FIXME: note the `-1` below, this is because optimizer.step increments by 1 as well
+                            optimizer.param_groups[0]['step'] = lr_scheduler.last_epoch - 1
                         else:
                             lr_scheduler.step()  # learning rate warmup
-                        global_step = take_optimizer_step(
-                            args, scaler, optimizer, model, global_step)
+                        global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
 
                     if adascale_step >= args.steps_this_run or timeout_sent:
-                        print(adascale_step, args.steps_this_run, "@@@@@@@")
                         train_time_raw = time.time() - raw_train_start
                         last_num_steps = int(
                             training_steps /
@@ -915,7 +915,7 @@ def main():
 
                         if not args.use_adascale:
                             gain = 1.0
-                            adascale_step = global_step # training_steps // args.gradient_accumulation_steps
+                            adascale_step = global_step 
 
                         if is_main_process():
                             dllogger.log(
@@ -938,6 +938,16 @@ def main():
                         writer.add_scalar('Train/Loss', average_loss, adascale_step)
                         writer.add_scalar('Train/Learning Rate', learning_rate, adascale_step)
                         writer.add_scalar('Train/Gain', gain, adascale_step)
+                        if args.use_adascale:
+                            writer.add_scalar('Train/var', optimizer.nonsmooth_var[0], adascale_step)
+                            writer.add_scalar('Train/sqr', optimizer.nonsmooth_sqr[0], adascale_step)
+                            writer.add_scalar('Train/var_smooth', optimizer.var, adascale_step)
+                            writer.add_scalar('Train/sqr_smooth', optimizer.sqr, adascale_step)
+                            # only logging the first param group
+                            writer.add_scalar('Train/allreduced_grad_sqr', optimizer.total_grad_sqr[0],
+                                                adascale_step)
+                            writer.add_scalar('Train/local_grad_sqr', optimizer.local_grad_sqr[0],
+                                                adascale_step)
                         writer.add_scalar('Train/GNS', gns, adascale_step)
                         writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
                         writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)

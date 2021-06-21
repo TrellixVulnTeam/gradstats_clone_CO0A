@@ -114,14 +114,19 @@ class PolyWarmUpScheduler(LRScheduler):
         self.degree = degree
         super(PolyWarmUpScheduler, self).__init__(optimizer, last_epoch)
 
-    def step(self, epoch=None):
+
+    def step(self, epoch=None, step_increment=1):
+        """
+        For adascale case step_increment will correspond to floor(gain)
+        """
         param_group = self.optimizer.param_groups[0]
         if 'step' in param_group:
-            self.last_epoch = param_group['step'] + 1
+            self.last_epoch = param_group['step'] + step_increment
         else:
             self.last_epoch = 1
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
+
 
     def get_lr(self):
         progress = self.last_epoch / self.total_steps
