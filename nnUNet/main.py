@@ -61,7 +61,7 @@ if __name__ == "__main__":
             )
         ]
     elif args.exec_mode == "train":
-        model = NNUnet(args, train_dataloader_len=len(data_module.train_dataloader()))
+        model = NNUnet(args)
         if args.save_ckpt:
             model_ckpt = ModelCheckpoint(monitor="dice_sum", mode="max", save_last=True)
         callbacks = [EarlyStopping(monitor="dice_sum", patience=args.patience, verbose=True, mode="max")]
@@ -90,6 +90,8 @@ if __name__ == "__main__":
         limit_train_batches=1.0 if args.train_batches == 0 else args.train_batches,
         limit_val_batches=1.0 if args.test_batches == 0 else args.test_batches,
         limit_test_batches=1.0 if args.test_batches == 0 else args.test_batches,
+        train_dataloader_len=len(data_module.train_dataloader()),
+        args=args
     )
 
     if args.benchmark:

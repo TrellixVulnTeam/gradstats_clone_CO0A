@@ -19,7 +19,6 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import torch.distributed as dist
 from torch.optim.optimizer import Optimizer
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -43,15 +42,8 @@ from models.loss import Loss
 from models.metrics import Dice
 from models.unet import UNet
 
-def get_world_size():
-    if not dist.is_available():
-        return 1
-    if not dist.is_initialized():
-        return 1
-    return dist.get_world_size()
-
 class NNUnet(pl.LightningModule):
-    def __init__(self, args, bermuda=False, data_dir=None, train_dataloader_len=None):
+    def __init__(self, args, bermuda=False, data_dir=None):
         super(NNUnet, self).__init__()
         self.args = args
         self.bermuda = bermuda
@@ -73,13 +65,7 @@ class NNUnet(pl.LightningModule):
             self.dice = Dice(self.n_class)
             if self.args.exec_mode in ["train", "evaluate"]:
                 self.dllogger = get_dllogger(args.results)
-        self.scale_one_bs = int(
-            self.args.batch_size * get_world_size() // self.args.lr_scale
-        )  # multiply by world size to account for division earlier
-        self.train_dataloader_len = train_dataloader_len
-        if self.train_dataloader_len:
-            self.scale_one_steps_per_epoch = int(
-                self.train_dataloader_len * args.batch_size // self.scale_one_bs)
+
         self.gns = 0.0
         self.gain = 1.0
         self.adascale_step = 0
@@ -343,19 +329,13 @@ class NNUnet(pl.LightningModule):
             If you also override the :meth:`~pytorch_lightning.core.hooks.ModelHooks.on_before_zero_grad`
             model hook don't forget to add the call to it before ``optimizer.zero_grad()`` yourself.
         """
-        # if self.args.enable_gns or self.args.enable_adascale:
-        #     if self.args.enable_gns:
-        #         self.gns = optimizer.gns(scale_one_batch_size=self.scale_one_bs)
-        #     if self.args.enable_adascale:
-        #         self.gain = optimizer.scale_invariant_steps(
-        #             aggressive_base_schedule=False)
-        #         prev_steps = math.floor(self.adascale_step)
-        #         self.adascale_step += self.gain
-        #         new_steps = math.floor(self.adascale_step)
-        #         scale_invariant_steps = new_steps - prev_steps
-        #         # progress base scale iteration `i` by scale_invariant_steps
-        #         i += scale_invariant_steps
-
+        if self.args.enable_gns or self.args.enable_adascale:
+            if self.args.enable_gns:
+                self.gns = optimizer.gns(scale_one_batch_size=self.scale_one_bs)
+            if self.args.enable_adascale:
+                self.gain = optimizer.scale_invariant_steps(
+                    aggressive_base_schedule=False)
+                self.trainer.adascale_step += math.floor(self.gain)
         if on_tpu:
             xm.optimizer_step(optimizer)
         elif using_native_amp:
