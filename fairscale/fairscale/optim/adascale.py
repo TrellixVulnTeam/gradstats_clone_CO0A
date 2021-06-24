@@ -73,7 +73,9 @@ class AdaScale(Optimizer):
         adjust_grads_for_accumulation = False,
         use_preconditioner = False,
         summary_writer=None,
+        trainer=None
     ):
+        self._trainer = trainer
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
         self._world_size: int = (
@@ -375,6 +377,8 @@ class AdaScale(Optimizer):
                 self._state[name] = factor * self._state[name] + (1.0 - factor) * value
 
     def _current_loss_scale(self):
+        if not self._scaler and self._trainer.scaler:
+            self._scaler = self._trainer.scaler
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
 
 

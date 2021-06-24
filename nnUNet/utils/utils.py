@@ -183,6 +183,14 @@ def get_main_args(strings=None):
         default=False,
         action='store_true',
         help='Enable gradient noise scale measurement for training run')
+    arg('--enable_adascale',
+        default=False,
+        action='store_true',
+        help='Enable adascale module for training run')
+    arg('--lr_scale',
+        type=float,
+        default=1.0,
+        help='Batch scaling factor for AdaScale.')
     arg('--gns_smoothing',
         type=float,
         default=0.0,

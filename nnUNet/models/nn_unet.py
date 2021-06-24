@@ -19,6 +19,9 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.optim.optimizer import Optimizer
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 from fairscale.optim import AdaScale
 from apex.optimizers import FusedAdam, FusedSGD
@@ -40,9 +43,15 @@ from models.loss import Loss
 from models.metrics import Dice
 from models.unet import UNet
 
+def get_world_size():
+    if not dist.is_available():
+        return 1
+    if not dist.is_initialized():
+        return 1
+    return dist.get_world_size()
 
 class NNUnet(pl.LightningModule):
-    def __init__(self, args, bermuda=False, data_dir=None):
+    def __init__(self, args, bermuda=False, data_dir=None, train_dataloader_len=None):
         super(NNUnet, self).__init__()
         self.args = args
         self.bermuda = bermuda
@@ -64,6 +73,16 @@ class NNUnet(pl.LightningModule):
             self.dice = Dice(self.n_class)
             if self.args.exec_mode in ["train", "evaluate"]:
                 self.dllogger = get_dllogger(args.results)
+        self.scale_one_bs = int(
+            self.args.batch_size * get_world_size() // self.args.lr_scale
+        )  # multiply by world size to account for division earlier
+        self.train_dataloader_len = train_dataloader_len
+        if self.train_dataloader_len:
+            self.scale_one_steps_per_epoch = int(
+                self.train_dataloader_len * args.batch_size // self.scale_one_bs)
+        self.gns = 0.0
+        self.gain = 1.0
+        self.adascale_step = 0
 
     def forward(self, img):
         return torch.argmax(self.model(img), 1)
@@ -228,6 +247,24 @@ class NNUnet(pl.LightningModule):
             "radam": RAdam(self.parameters(), lr=self.learning_rate, weight_decay=self.args.weight_decay),
         }[self.args.optimizer.lower()]
 
+        import torch.distributed as dist
+        def get_rank():
+            if not dist.is_available():
+                return 0
+            if not dist.is_initialized():
+                return 0
+            return dist.get_rank()
+
+        # wrap optimizer in AdaScale if predicting batch size or adjusting LR
+        if self.args.enable_adascale or self.args.enable_gns:
+            optimizer = AdaScale(
+                optimizer,
+                rank=get_rank(),
+                is_adaptive=False,
+                smoothing=None,  # smoothing coefficient determined by scale
+                trainer=self.trainer)
+            optimizer.set_scale(self.args.lr_scale)
+
         scheduler = {
             "none": None,
             "multistep": torch.optim.lr_scheduler.MultiStepLR(optimizer, self.args.steps, gamma=self.args.factor),
@@ -241,6 +278,92 @@ class NNUnet(pl.LightningModule):
         if scheduler is not None:
             opt_dict.update({"lr_scheduler": scheduler})
         return opt_dict
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Optimizer,
+        optimizer_idx: int,
+        second_order_closure: Optional[Callable] = None,
+        on_tpu: bool = False,
+        using_native_amp: bool = False,
+        using_lbfgs: bool = False,
+    ) -> None:
+        r"""
+        Override this method to adjust the default way the
+        :class:`~pytorch_lightning.trainer.trainer.Trainer` calls each optimizer.
+        By default, Lightning calls ``step()`` and ``zero_grad()`` as shown in the example
+        once per optimizer.
+        Args:
+            epoch: Current epoch
+            batch_idx: Index of current batch
+            optimizer: A PyTorch optimizer
+            optimizer_idx: If you used multiple optimizers this indexes into that list.
+            second_order_closure: closure for second order methods
+            on_tpu: true if TPU backward is required
+            using_native_amp: True if using native amp
+            using_lbfgs: True if the matching optimizer is lbfgs
+        Examples:
+            .. code-block:: python
+                # DEFAULT
+                def optimizer_step(self, current_epoch, batch_idx, optimizer, optimizer_idx,
+                                   second_order_closure, on_tpu, using_native_amp, using_lbfgs):
+                    optimizer.step()
+                # Alternating schedule for optimizer steps (i.e.: GANs)
+                def optimizer_step(self, current_epoch, batch_idx, optimizer, optimizer_idx,
+                                   second_order_closure, on_tpu, using_native_amp, using_lbfgs):
+                    # update generator opt every 2 steps
+                    if optimizer_idx == 0:
+                        if batch_idx % 2 == 0 :
+                            optimizer.step()
+                            optimizer.zero_grad()
+                    # update discriminator opt every 4 steps
+                    if optimizer_idx == 1:
+                        if batch_idx % 4 == 0 :
+                            optimizer.step()
+                            optimizer.zero_grad()
+                    # ...
+                    # add as many optimizers as you want
+            Here's another example showing how to use this for more advanced things such as
+            learning rate warm-up:
+            .. code-block:: python
+                # learning rate warm-up
+                def optimizer_step(self, current_epoch, batch_idx, optimizer,
+                                    optimizer_idx, second_order_closure, on_tpu, using_native_amp, using_lbfgs):
+                    # warm up lr
+                    if self.trainer.global_step < 500:
+                        lr_scale = min(1., float(self.trainer.global_step + 1) / 500.)
+                        for pg in optimizer.param_groups:
+                            pg['lr'] = lr_scale * self.learning_rate
+                    # update params
+                    optimizer.step()
+                    optimizer.zero_grad()
+        Note:
+            If you also override the :meth:`~pytorch_lightning.core.hooks.ModelHooks.on_before_zero_grad`
+            model hook don't forget to add the call to it before ``optimizer.zero_grad()`` yourself.
+        """
+        # if self.args.enable_gns or self.args.enable_adascale:
+        #     if self.args.enable_gns:
+        #         self.gns = optimizer.gns(scale_one_batch_size=self.scale_one_bs)
+        #     if self.args.enable_adascale:
+        #         self.gain = optimizer.scale_invariant_steps(
+        #             aggressive_base_schedule=False)
+        #         prev_steps = math.floor(self.adascale_step)
+        #         self.adascale_step += self.gain
+        #         new_steps = math.floor(self.adascale_step)
+        #         scale_invariant_steps = new_steps - prev_steps
+        #         # progress base scale iteration `i` by scale_invariant_steps
+        #         i += scale_invariant_steps
+
+        if on_tpu:
+            xm.optimizer_step(optimizer)
+        elif using_native_amp:
+            self.trainer.scaler.step(optimizer)
+        elif using_lbfgs:
+            optimizer.step(second_order_closure)
+        else:
+            optimizer.step()
 
     def save_mask(self, pred):
         if self.test_idx == 0:
