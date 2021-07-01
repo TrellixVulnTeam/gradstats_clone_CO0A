@@ -1,0 +1,2 @@
+Add LICENSE from fairscale if we stick to current implementation
+- if we extend to horovod for customers then don't need fairscale license
