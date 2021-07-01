@@ -33,7 +33,6 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Dataset
 from torch.utils.data.distributed import DistributedSampler
 import math
-from apex import amp
 import multiprocessing
 
 from tokenization import BertTokenizer
@@ -46,7 +45,7 @@ from utils import is_main_process, format_step, get_world_size, get_rank, upload
 from torch.nn.parallel import DistributedDataParallel as DDP
 from schedulers import LinearWarmUpScheduler
 
-from fairscale.optim import AdaScale
+from automl.autoscaler import AdaScale
 from torch.utils.tensorboard import SummaryWriter
 import dllogger
 from concurrent.futures import ProcessPoolExecutor

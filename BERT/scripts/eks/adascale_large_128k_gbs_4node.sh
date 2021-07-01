@@ -1,3 +1,4 @@
+root@squad-job-master-0:/gradstats/BERT/scripts/eks# cat adascale_large_128k_gbs_4node.sh
 #!/bin/bash
 
 # Copyright (c) 2019 NVIDIA CORPORATION. All rights reserved.
@@ -22,8 +23,8 @@ export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
 export OMP_NUM_THREADS=96
 
-# 32K batch settings for 32 GPUs
-train_batch_size=${1:-1024}
+# 128K batch settings for 32 GPUs - settings are same as 32K bs except for scale and batch size
+train_batch_size=${1:-4096}
 learning_rate=${2:-"5.9415e-4"}
 adamw_beta1=0.934271
 adamw_beta2=0.989295
@@ -59,7 +60,7 @@ DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/ 
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/1x_large_4node/
+RESULTS_DIR=/shared/export/BERT/4x_large_4node/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
@@ -146,10 +147,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-#CMD+=" --enable_gns"
-#CMD+=" --use_adascale"
-#CMD+=" --lr_scale=2.0"
-#CMD+=" --gns_smoothing=0.25"
+CMD+=" --enable_gns"
+CMD+=" --use_adascale"
+CMD+=" --lr_scale=4.0"
+CMD+=" --gns_smoothing=0.5"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -160,7 +161,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node "
+CMD+=" --label bert_training_large_128k_4node "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -252,10 +253,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-#CMD+=" --enable_gns"
-#CMD+=" --use_adascale"
-#CMD+=" --lr_scale=2.0"
-#CMD+=" --gns_smoothing=0.25"
+CMD+=" --enable_gns"
+CMD+=" --use_adascale"
+CMD+=" --lr_scale=4.0"
+CMD+=" --gns_smoothing=0.5"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -267,7 +268,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train --phase2 --resume_from_checkpoint " 
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node "
+CMD+=" --label bert_training_large_128k_4node "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 

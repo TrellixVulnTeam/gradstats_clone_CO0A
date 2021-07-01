@@ -9,7 +9,7 @@ from .cosine_lr_scheduler import CosineAnnealingWarmUpRestarts
 from .fused_sgd import FusedSGD
 from .fused_novograd import FusedNovoGrad
 from .unfused_novograd import Novograd
-from fairscale.optim import AdaScale
+from automl.autoscaler import AdaScale
 from .sgdw import SGDW
 
 #for debugging only
