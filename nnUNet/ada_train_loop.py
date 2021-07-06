@@ -1,17 +1,68 @@
 from pytorch_lightning.trainer.training_loop import TrainLoop
 from pytorch_lightning.utilities.model_utils import is_overridden
 from pytorch_lightning.trainer.supporters import TensorRunningAccum, Accumulator
+from pytorch_lightning.trainer.states import TrainerState
 
+import torch
+import torch.distributed as dist
+from torch.utils.tensorboard import SummaryWriter
 from copy import deepcopy
+from utils.utils import upload_dir
+
+def get_world_size():
+    if not dist.is_available():
+        return 1
+    if not dist.is_initialized():
+        return 1
+    return dist.get_world_size()
 
 class AdaTrainLoop(TrainLoop):
+
+    def on_trainer_init(self, max_epochs, min_epochs, max_steps, min_steps, num_sanity_val_steps, automatic_optimization):
+        self.trainer.global_step = 0
+        self.trainer.current_epoch = 0
+        self.trainer.interrupted = False
+        self.trainer.should_stop = False
+        self.trainer._state = TrainerState.INITIALIZING
+
+        self.trainer.total_batch_idx = 0
+        self.trainer.batch_idx = 0
+        self.trainer.num_training_batches = 0
+        self.trainer.train_dataloader = None
+        self.automatic_optimization = automatic_optimization
+
+        self.trainer.max_epochs = max_epochs
+        self.trainer.min_epochs = min_epochs
+        self.trainer.max_steps = max_steps
+        self.trainer.min_steps = min_steps
+
+        if num_sanity_val_steps == -1:
+            self.trainer.num_sanity_val_steps = float('inf')
+        else:
+            self.trainer.num_sanity_val_steps = num_sanity_val_steps
+
+
+    def on_train_start(self):
+        # clear cache before training
+        if self.trainer.on_gpu and self.trainer.root_gpu is not None:
+            # use context because of:
+            # https://discuss.pytorch.org/t/out-of-memory-when-i-use-torch-cuda-empty-cache/57898
+            with torch.cuda.device(f'cuda:{self.trainer.root_gpu}'):
+                torch.cuda.empty_cache()
+
+        # hook
+        self.trainer.call_hook('on_train_start')
+
+        # adascale related init
+        self.trainer.writer = SummaryWriter(
+            f'{self.trainer.args.log_dir}/{self.trainer.args.label}/worker-{torch.distributed.get_rank()}')
+        self.trainer.adascale_step = 0
+        self.trainer.adascale_accu_step = 0
+
     def on_train_epoch_start(self, epoch):
 
         # update training progress in trainer
         self.trainer.current_epoch = epoch
-
-        # re-init adascale step
-        self.trainer.adascale_step = 0
 
         model = self.trainer.get_model()
 
@@ -42,8 +93,8 @@ class AdaTrainLoop(TrainLoop):
         self.trainer.call_hook('on_train_epoch_start')
 
     def run_training_epoch(self):
-
         # get model
+
         model = self.trainer.get_model()
 
         # modify dataloader if needed (ddp, etc...)
@@ -56,12 +107,17 @@ class AdaTrainLoop(TrainLoop):
         train_dataloader = self.trainer.data_connector.get_profiled_train_dataloader(train_dataloader)
         dataloader_idx = 0
         should_check_val = False
+        self.trainer.num_training_batches = 9
+        self.trainer.scale_one_bs = int(
+            self.trainer.args.batch_size * get_world_size() // self.trainer.args.lr_scale)  # multiply by world size to account for division earlier
+        self.trainer.scale_one_steps_per_epoch = int(
+            self.trainer.num_training_batches * self.trainer.args.batch_size * get_world_size() // self.trainer.scale_one_bs)
+        self.trainer.val_check_batch = float('inf')
+
         for batch_idx, (batch, is_last_batch) in train_dataloader:
-            print(f"\nadascale_step is {self.trainer.adascale_step}\n"
-                  f"scale_one_steps_per_epoch is {self.trainer.scale_one_steps_per_epoch}")
-            if self.trainer.adascale_step > self.trainer.scale_one_steps_per_epoch:
-                print('now we break!!!!!!!!!!')
-                break
+            if batch_idx + 1 >= self.trainer.num_training_batches:
+                is_last_batch = True
+
             self.trainer.batch_idx = batch_idx
 
             # ------------------------------------
@@ -125,6 +181,14 @@ class AdaTrainLoop(TrainLoop):
 
             # progress global step according to grads progress
             self.increment_accumulated_grad_global_step()
+
+        # flush writer
+        self.trainer.writer.flush()
+        res = upload_dir(f'{self.trainer.args.log_dir}/{self.trainer.args.label}',
+                         self.trainer.args.bucket,
+                         f'nnUNet/{self.trainer.args.label}')
+        if not res:
+            print("Failed to push to S3")
 
         # log epoch metrics
         self.trainer.logger_connector.log_train_epoch_end_metrics(

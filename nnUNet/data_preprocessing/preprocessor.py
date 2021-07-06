@@ -144,8 +144,11 @@ class Preprocessor:
         return self.normalize_intensity(image)
 
     def save(self, image, label, fname, test_metadata):
+        import time
+        start = time.time()
         mean, std = np.round(np.mean(image, (1, 2, 3)), 2), np.round(np.std(image, (1, 2, 3)), 2)
         print(f"Saving {fname} shape {image.shape} mean {mean} std {std}")
+        print(f'step process time {time.time() - start}')
         self.save_npy(image, fname, "_x.npy")
         if label is not None:
             self.save_npy(label, fname, "_y.npy")

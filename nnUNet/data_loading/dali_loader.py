@@ -303,6 +303,7 @@ def fetch_dali_loader(imgs, lbls, batch_size, mode, **kwargs):
         pipeline = TrainPipeline
         output_map = ["image", "label"]
         dynamic_shape = False
+
         if kwargs["dim"] == 2:
             pipe_kwargs.update({"batch_size_2d": batch_size // kwargs["nvol"]})
             batch_size = kwargs["nvol"]
@@ -318,7 +319,6 @@ def fetch_dali_loader(imgs, lbls, batch_size, mode, **kwargs):
         pipeline = TestPipeline
         output_map = ["image", "meta"]
         dynamic_shape = True
-
     device_id = int(os.getenv("LOCAL_RANK", "0"))
     pipe = pipeline(batch_size, kwargs["num_workers"], device_id, **pipe_kwargs)
     return LightningWrapper(

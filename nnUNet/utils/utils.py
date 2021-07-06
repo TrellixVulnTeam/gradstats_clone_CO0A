@@ -23,6 +23,45 @@ import torch
 from dllogger import JSONStreamBackend, Logger, StdOutBackend, Verbosity
 from sklearn.model_selection import KFold
 
+import logging
+import boto3
+from botocore.exceptions import ClientError
+import torch
+import os
+
+def upload_dir(file_dir, bucket, s3_prefix):
+    """Upload a file to an S3 bucket
+
+    :param file_dir: File dir to upload
+    :param bucket: Bucket to upload to
+    :param s3_prefix: s3 path prefix
+    :return: True if file was uploaded, else False
+    """
+
+    # Upload the dir
+    s3_client = boto3.client('s3')
+
+    for worker_folder in os.listdir(file_dir):
+        for file_name in os.listdir(f'{file_dir}/{worker_folder}'):
+            try:
+                response = s3_client.upload_file(f'{file_dir}/{worker_folder}/{file_name}',
+                                                 bucket,
+                                                 f'{s3_prefix}/{worker_folder}/{file_name}')
+            except ClientError as e:
+                logging.error(e)
+                return False
+    return True
+
+
+def is_global_rank_zero():
+    if torch.distributed.get_rank() == 0:
+        return True
+    return False
+
+def make_path_if_not_exists(dirpath):
+    if not os.path.exists(dirpath):
+        os.makedirs(dirpath, exist_ok=True)
+        print(f"{dirpath} created")
 
 def is_main_process():
     return int(os.getenv("LOCAL_RANK", "0")) == 0
@@ -195,6 +234,9 @@ def get_main_args(strings=None):
         type=float,
         default=0.0,
         help='Smoothing factor for gradient stats.')
+    arg("--log_dir", type=str, default="./tfboard_log", help="Path to tensorboard directory")
+    arg("--label", type=str, default="net_training_t0", help="name of tensorboard s3 bucket folder")
+    arg("--bucket", type=str, default="mzanur-autoscaler", help="name of tensorboard s3 bucket folder")
     arg("--data", type=str, default="/data", help="Path to data directory")
     arg("--results", type=str, default="/results", help="Path to results directory")
     arg("--logname", type=str, default=None, help="Name of dlloger output")

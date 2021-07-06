@@ -7,7 +7,6 @@ from typing import Dict, Iterable, List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader
-import torch.distributed as dist
 
 from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.core.datamodule import LightningDataModule
@@ -50,14 +49,6 @@ from pytorch_lightning.trainer.properties import TrainerProperties
 from pytorch_lightning.plugins.plugin_connector import PluginConnector
 from pytorch_lightning.accelerators.accelerator import Accelerator
 from pytorch_lightning.accelerators.cpu_accelerator import CPUAccelerator
-
-
-def get_world_size():
-    if not dist.is_available():
-        return 1
-    if not dist.is_initialized():
-        return 1
-    return dist.get_world_size()
 
 class AdaTrainer(Trainer):
     @overwrite_by_env_vars
@@ -219,19 +210,22 @@ class AdaTrainer(Trainer):
         self.evaluation_loop = EvaluationLoop(self)
         self.train_loop = AdaTrainLoop(self)
         self.plugin_connector = PluginConnector(self)
-
         # training state
         self.weights_summary = weights_summary
         self.model = None
         self.shown_warnings = set()
 
         # init adascale related
-        self.adascale_step = 0
-        self.scale_one_bs = int(
-            args.batch_size * get_world_size() // args.lr_scale
-        )  # multiply by world size to account for division earlier
-        self.scale_one_steps_per_epoch = int(
-            train_dataloader_len * args.batch_size // self.scale_one_bs)
+        self.adascale_step = None # adascale normal step
+        self.adascale_accu_step = None # adascale accumulation step
+        self.scale_one_bs = None
+        self.scale_one_steps_per_epoch = None
+
+        # args
+        self.args = args
+
+        # writer
+        self.writer = None
 
         # init callbacks
         # Declare attributes to be set in callback_connector on_trainer_init
@@ -316,5 +310,4 @@ class AdaTrainer(Trainer):
 
         # Callback system
         self.on_init_end()
-
 

@@ -26,11 +26,18 @@ from data_loading.data_module import DataModule
 from models.nn_unet import NNUnet
 from utils.gpu_affinity import set_affinity
 from utils.logger import LoggingCallback
-from utils.utils import get_main_args, is_main_process, log, make_empty_dir, set_cuda_devices, verify_ckpt_path
-
+from utils.utils import (get_main_args,
+                         is_main_process,
+                         log,
+                         make_empty_dir,
+                         set_cuda_devices,
+                         verify_ckpt_path,
+                         make_path_if_not_exists)
 
 if __name__ == "__main__":
     args = get_main_args()
+
+    make_path_if_not_exists(args.log_dir)
 
     if args.profile:
         pyprof.init(enable_function_stack=True)
@@ -98,7 +105,6 @@ if __name__ == "__main__":
     # 49 * 64
     # 49 for bs64, 384
     # trainer.num_training_batches = math.ceil(49 / (args.batch_size / 64))
-    print(f'trainer.num_training_batches is {trainer.num_training_batches}')
 
     if args.benchmark:
         if args.exec_mode == "train":
@@ -132,3 +138,6 @@ if __name__ == "__main__":
             model.save_dir = save_dir
             make_empty_dir(save_dir)
         trainer.test(model, test_dataloaders=data_module.test_dataloader())
+
+    trainer.writer.close()
+

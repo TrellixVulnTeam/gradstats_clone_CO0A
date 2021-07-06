@@ -58,6 +58,7 @@ class NNUnet(pl.LightningModule):
         self.best_sum_dice = self.n_class * [0]
         self.test_idx = 0
         self.test_imgs = []
+        self.cur_loss = None
         if not self.bermuda:
             self.learning_rate = args.learning_rate
             self.loss = Loss(self.args.focal)
@@ -68,7 +69,6 @@ class NNUnet(pl.LightningModule):
 
         self.gns = 0.0
         self.gain = 1.0
-        self.adascale_step = 0
 
     def forward(self, img):
         return torch.argmax(self.model(img), 1)
@@ -84,6 +84,7 @@ class NNUnet(pl.LightningModule):
         img, lbl = self.get_train_data(batch)
         pred = self.model(img)
         loss = self.loss(pred, lbl)
+        self.cur_loss = loss
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -210,17 +211,26 @@ class NNUnet(pl.LightningModule):
 
         if is_main_process():
             metrics = {}
-            metrics.update({"mean dice": round(torch.mean(dice).item(), 2)})
-            metrics.update({"TOP_mean": round(torch.mean(self.best_sum_dice).item(), 2)})
+            mean_dice = round(torch.mean(dice).item(), 2)
+            TOP_mean = round(torch.mean(self.best_sum_dice).item(), 2)
+            metrics.update({"mean dice": mean_dice})
+            metrics.update({"TOP_mean": TOP_mean})
             if self.n_class > 1:
                 metrics.update({f"L{i+1}": round(m.item(), 2) for i, m in enumerate(dice)})
                 metrics.update({f"TOP_L{i+1}": round(m.item(), 2) for i, m in enumerate(self.best_sum_dice)})
-            metrics.update({"val_loss": round(loss.item(), 4)})
+            val_loss = round(loss.item(), 4)
+            metrics.update({"val_loss": val_loss})
             self.dllogger.log(step=self.current_epoch, data=metrics)
             self.dllogger.flush()
 
+            # tensorboard writer
+            self.trainer.writer.add_scalar('Test/Mean Dice', mean_dice, self.trainer.current_epoch)
+            self.trainer.writer.add_scalar('Test/Top Mean', TOP_mean, self.trainer.current_epoch)
+            self.trainer.writer.add_scalar('Test/Val Loss', val_loss, self.trainer.current_epoch)
         self.log("val_loss", loss)
         self.log("dice_sum", dice_sum)
+
+
 
     def test_epoch_end(self, outputs):
         if self.args.exec_mode == "evaluate":
@@ -246,7 +256,7 @@ class NNUnet(pl.LightningModule):
             optimizer = AdaScale(
                 optimizer,
                 rank=get_rank(),
-                is_adaptive=False,
+                is_adaptive=True,
                 smoothing=None,  # smoothing coefficient determined by scale
                 trainer=self.trainer)
             optimizer.set_scale(self.args.lr_scale)
@@ -329,13 +339,23 @@ class NNUnet(pl.LightningModule):
             If you also override the :meth:`~pytorch_lightning.core.hooks.ModelHooks.on_before_zero_grad`
             model hook don't forget to add the call to it before ``optimizer.zero_grad()`` yourself.
         """
+        cur_lr = None
+        for param_group in optimizer.param_groups:
+            cur_lr = param_group['lr']
+
         if self.args.enable_gns or self.args.enable_adascale:
             if self.args.enable_gns:
-                self.gns = optimizer.gns(scale_one_batch_size=self.scale_one_bs)
+                self.gns = optimizer.gns(scale_one_batch_size=self.trainer.scale_one_bs)
+
             if self.args.enable_adascale:
-                self.gain = optimizer.scale_invariant_steps(
-                    aggressive_base_schedule=False)
-                self.trainer.adascale_step += math.floor(self.gain)
+                self.gain = optimizer.gain()
+                prev_step = math.floor(self.trainer.adascale_accu_step)
+                self.trainer.adascale_accu_step += self.gain
+                new_step = math.floor(self.trainer.adascale_accu_step)
+                scale_invariant_steps = new_step - prev_step
+                # progress base scale iteration `i` by scale_invariant_steps
+                self.trainer.adascale_step += scale_invariant_steps
+
         if on_tpu:
             xm.optimizer_step(optimizer)
         elif using_native_amp:
@@ -344,6 +364,28 @@ class NNUnet(pl.LightningModule):
             optimizer.step(second_order_closure)
         else:
             optimizer.step()
+        tensorboard_step = self.trainer.global_step
+        if self.args.enable_gns or self.args.enable_adascale:
+            tensorboard_step = self.trainer.adascale_step
+            if self.args.enable_gns:
+                self.trainer.writer.add_scalar('Train/GNS', self.gns, tensorboard_step)
+
+            if self.args.enable_adascale:
+                self.trainer.writer.add_scalar('Train/Real Iterations', self.trainer.global_step, tensorboard_step)
+                self.trainer.writer.add_scalar('Train/Gain', self.gain, tensorboard_step)
+                self.trainer.writer.add_scalar('Train/Effective LR', cur_lr * self.gain, tensorboard_step)
+                self.trainer.writer.add_scalar('Train/var', optimizer.nonsmooth_var[0], tensorboard_step)
+                self.trainer.writer.add_scalar('Train/sqr', optimizer.nonsmooth_sqr[0], tensorboard_step)
+                self.trainer.writer.add_scalar('Train/var_smooth', optimizer.var, tensorboard_step)
+                self.trainer.writer.add_scalar('Train/sqr_smooth', optimizer.sqr, tensorboard_step)
+                # only logging the first param group
+                self.trainer.writer.add_scalar('Train/allreduced_grad_sqr', optimizer.total_grad_sqr[0],
+                                  tensorboard_step)
+                self.trainer.writer.add_scalar('Train/local_grad_sqr', optimizer.local_grad_sqr[0],
+                                  tensorboard_step)
+        self.trainer.writer.add_scalar('Train/Loss', self.cur_loss, tensorboard_step)
+        self.trainer.writer.add_scalar('Train/Learning Rate', cur_lr, tensorboard_step)
+        self.trainer.writer.add_scalar('Train/Scale', self.args.lr_scale, tensorboard_step)
 
     def save_mask(self, pred):
         if self.test_idx == 0:

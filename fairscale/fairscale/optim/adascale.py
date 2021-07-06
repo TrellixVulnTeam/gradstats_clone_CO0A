@@ -312,6 +312,7 @@ class AdaScale(Optimizer):
             max_scale = np.power(max_scale, power_law_ratio)
         gain = (var + sqr) / (var / max_scale + sqr)
         # for tensorboard
+        # print(f"var"self.var)
         self.var = var
         self.sqr = sqr
         return gain
@@ -411,7 +412,6 @@ class AdaScale(Optimizer):
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
-
         grads_are_invalid = False
         if torch.sum(torch.isnan(grad)) or torch.sum(torch.isinf(grad)):
             grads_are_invalid = True
