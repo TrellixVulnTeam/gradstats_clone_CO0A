@@ -20,8 +20,7 @@ import torchvision.models as models
 from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
 import math
-from fairscale.optim import AdaScale
-
+from automl.autoscaler import AdaScale
 from torch.utils.tensorboard import SummaryWriter
 from utils import upload_dir, make_path_if_not_exists
 

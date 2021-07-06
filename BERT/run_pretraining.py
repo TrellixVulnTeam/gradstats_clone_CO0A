@@ -33,7 +33,6 @@ import torch
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Dataset
 from torch.utils.data.distributed import DistributedSampler
 import math
-from apex import amp
 import multiprocessing
 
 from tokenization import BertTokenizer
@@ -46,7 +45,7 @@ from utils import is_main_process, format_step, get_world_size, get_rank, upload
 from torch.nn.parallel import DistributedDataParallel as DDP
 from schedulers import LinearWarmUpScheduler
 
-from fairscale.optim import AdaScale
+from automl.autoscaler import AdaScale
 from torch.utils.tensorboard import SummaryWriter
 import dllogger
 from concurrent.futures import ProcessPoolExecutor
@@ -883,6 +882,8 @@ def main():
                             # progress optimizer state so that scheduler 'step' updates count correctly
                             # HACK FIXME: note the `-1` below, this is because optimizer.step increments by 1 as well
                             optimizer.param_groups[0]['step'] = lr_scheduler.last_epoch - 1
+                            # FIXME: For some reason at the first iteration the optimizer lr states do not get synced so force that here
+                            optimizer._optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']
                         else:
                             lr_scheduler.step()  # learning rate warmup
                         global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
@@ -912,7 +913,6 @@ def main():
                             args.gradient_accumulation_steps) == 0:
                         average_loss /= (args.log_freq * divisor)
                         learning_rate = optimizer.param_groups[0]['lr']
-
                         if not args.use_adascale:
                             gain = 1.0
                             adascale_step = global_step 

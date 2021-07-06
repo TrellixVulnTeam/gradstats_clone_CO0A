@@ -16,7 +16,7 @@ ENV FORCE_CUDA=${FORCE_CUDA}
 
 # adascale deps
 #
-WORKDIR $HOME/gradstats/fairscale
+WORKDIR $HOME/gradstats/autoscaler
 RUN pip install -e .
 
 # bert deps

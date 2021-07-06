@@ -26,7 +26,7 @@ export OMP_NUM_THREADS=96
 # for example, train bs for phase 1 is 4096 with 32 gpus  or 2048 with 64 gpus
 # in order to fill up gpu mem - we do batch size per gpu // reduced grad accumulation
 train_batch_size=${1:-4096}
-learning_rate=${2:-"1.3653e-3"}
+learning_rate=${2:-"1.9308e-3"}
 adamw_beta1=0.952378
 adamw_beta2=0.86471
 adamw_weight_decay=0.19891
@@ -35,7 +35,7 @@ lr_poly_power=2
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
 warmup_proportion=${5:-"0.2843"}
-train_steps=${6:-7038}
+train_steps=${6:-3519}
 save_checkpoint_steps=${7:-500}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
@@ -45,12 +45,12 @@ seed=${12:-5623}
 job_name=${13:-"bert_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"true"}
 train_batch_size_phase2=${16:-2048}
-learning_rate_phase2=${17:-"6.1951e-5"}
+learning_rate_phase2=${17:-"8.7612e-5"}
 adamw_phase2_beta1=0.65322
 adamw_phase2_beta2=0.82451
 adamw_phase2_weight_decay=0.19891
 warmup_proportion_phase2=${18:-"0.5"}
-train_steps_phase2=${19:-781}
+train_steps_phase2=${19:-392}
 gradient_accumulation_steps_phase2=${20:-256}
 sampling_with_replacement=${21:-"true"}
 DATASET=books_wiki_en_corpus
@@ -60,7 +60,7 @@ DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/2x_4node_fsx_refresh/
+RESULTS_DIR=/shared/export/BERT/2x_4node_sqrt/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
  
 mkdir -p $CHECKPOINTS_DIR
@@ -146,10 +146,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-CMD+=" --enable_gns"
-CMD+=" --use_adascale"
-CMD+=" --lr_scale=2.0"
-CMD+=" --gns_smoothing=0.5"
+#CMD+=" --enable_gns"
+#CMD+=" --use_adascale"
+#CMD+=" --lr_scale=2.0"
+#CMD+=" --gns_smoothing=0.5"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -160,7 +160,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_128k_4node_fsx_refresh "
+CMD+=" --label bert_training_128k_4node_sqrt "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -252,10 +252,10 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-CMD+=" --enable_gns"
-CMD+=" --use_adascale"
-CMD+=" --lr_scale=2.0"
-CMD+=" --gns_smoothing=0.5"
+#CMD+=" --enable_gns"
+#CMD+=" --use_adascale"
+#CMD+=" --lr_scale=2.0"
+#CMD+=" --gns_smoothing=0.5"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -267,7 +267,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train --phase2 --resume_from_checkpoint " 
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_128k_4node_fsx_refresh "
+CMD+=" --label bert_training_128k_4node_sqrt "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 

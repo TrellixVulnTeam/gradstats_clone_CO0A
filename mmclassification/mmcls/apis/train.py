@@ -9,7 +9,7 @@ from mmcls.core import (DistEvalHook, DistOptimizerHook, EvalHook,
                         Fp16OptimizerHook)
 from mmcls.datasets import build_dataloader, build_dataset
 from mmcls.utils import get_root_logger
-from fairscale.optim import AdaScale
+from automl.autoscaler import AdaScale
 
 def set_random_seed(seed, deterministic=False):
     """Set random seed.

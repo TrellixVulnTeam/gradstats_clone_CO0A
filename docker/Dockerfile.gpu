@@ -25,7 +25,7 @@ RUN python setup.py build develop
 
 # adascale deps
 #
-WORKDIR $HOME/gradstats/fairscale
+WORKDIR $HOME/gradstats/autoscaler
 RUN pip install -e .
 
 # bert deps
