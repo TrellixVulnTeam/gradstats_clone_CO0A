@@ -54,12 +54,12 @@ gradient_accumulation_steps_phase2=${20:-128}
 sampling_with_replacement=${21:-"true"}
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/shared/benchmarking_datasets/nlp/BERT/phase1/ 
-BERT_CONFIG=/gradstats/BERT/bert_base_config.json
+BERT_CONFIG=/gradstats/BERT/bert_config.json
 DATASET2=books_wiki_en_corpus 
 DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/ 
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/1x_large_4node/
+RESULTS_DIR=/shared/export/BERT/1x_large_4node_fixed/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
@@ -78,7 +78,7 @@ if [ ! -d "$CHECKPOINTS_DIR" ] ; then
    CHECKPOINTS_DIR=$RESULTS_DIR
 fi
 if [ ! -f "$BERT_CONFIG" ] ; then
-   echo "Error! BERT base configuration file not found at $BERT_CONFIG"
+   echo "Error! BERT configuration file not found at $BERT_CONFIG"
    exit -1
 fi
 # 
@@ -160,7 +160,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node "
+CMD+=" --label bert_training_large_32k_4node_fixed "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -187,6 +187,7 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
+
 if [ -z "$LOGFILE" ] ; then
    $CMD
 else
@@ -267,7 +268,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train --phase2 --resume_from_checkpoint " 
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node "
+CMD+=" --label bert_training_large_32k_4node_fixed "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 

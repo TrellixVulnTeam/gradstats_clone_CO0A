@@ -468,12 +468,12 @@ class AdaScale(Optimizer):
         
         # check for large outliers - don't apply to moving averages if "very" large
         found_outlier = False
-        SAFE_RATIO = 3.0
+        SAFE_RATIO = 1.0
         MIN_STEPS = 50
         if self.local_grad_sqr is None:
             self.local_grad_sqr = np_local_grad_sqr
         # print("rank={}, latest={}, previous={}".format(self._rank, np_local_grad_sqr, self.local_grad_sqr))
-        if  self.steps > MIN_STEPS and self.local_grad_sqr[0] > 0.0 and np.abs(np.log(np_local_grad_sqr[0]/self.local_grad_sqr[0])) > SAFE_RATIO:
+        if  self.steps > MIN_STEPS and self.local_grad_sqr[0] > 0.0 and np.abs(np.log10(np_local_grad_sqr[0]/self.local_grad_sqr[0])) > SAFE_RATIO:
             found_outlier = True
             # use previous value
             for i, v in enumerate(self.local_grad_sqr):

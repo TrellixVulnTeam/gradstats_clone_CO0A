@@ -436,6 +436,11 @@ def parse_arguments():
                         type=float,
                         default=1.0,
                         help='Batch scaling factor for AdaScale.')
+    #FIXME: make part of checkpoint - hack to do deal with the PVRE reboot stupidity
+    parser.add_argument('--scale_invariant_steps',
+                        type=float,
+                        default=0.0,
+                        help='Batch scaling factor for AdaScale.')
 
     args = parser.parse_args()
     args.fp16 = args.fp16 or args.amp
@@ -721,7 +726,7 @@ def main():
         average_loss = 0.0  # averaged loss every args.log_freq steps
         epoch = 0
         training_steps = 0
-        adascale_step = 0
+        adascale_step = args.scale_invariant_steps
         accumulate_gradients = args.gradient_accumulation_steps > 1
 
         pool = ProcessPoolExecutor(12)

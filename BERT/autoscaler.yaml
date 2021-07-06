@@ -1,0 +1,10 @@
+autoscaler:
+  - precondition_gradients: On
+  - smoothing: 0.5
+  - adascale:
+      enabled: On
+      scale: 2.0
+  - gradient_noise_scale:
+      enabled: On
+      batch_size_upper_limit: .Inf
+      scale_one_batch_size: 65536
