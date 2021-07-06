@@ -442,6 +442,11 @@ def parse_arguments():
                         default=0.0,
                         help='Batch scaling factor for AdaScale.')
 
+    parser.add_argument('--scale_one_bs',
+                        type=int,
+                        default=32768,
+                        help='Scale one Batch size for GNS.')
+
     args = parser.parse_args()
     args.fp16 = args.fp16 or args.amp
 
@@ -876,7 +881,7 @@ def main():
                         ####### GNS/ADASCALE METRICS #########
                         gns = 0.0
                         if args.enable_gns:
-                            gns = optimizer.gns(scale_one_batch_size=65536) # FIXME hardcoded
+                            gns = optimizer.gns(scale_one_batch_size=args.scale_one_bs)
                         if args.use_adascale:
                             gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
                             prev_steps = math.floor(adascale_step)
