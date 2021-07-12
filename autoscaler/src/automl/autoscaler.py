@@ -85,7 +85,8 @@ class AdaScale(Optimizer):
         self._debias_ewma = debias_ewma
         self._rank = rank
         self._is_adaptive = is_adaptive
-        self._gain_invalid = True
+        # NOTE: If using nccl then this has to be a cuda tensor
+        self._gain_invalid = torch.ones(1, dtype=torch.uint8, requires_grad=False).cuda() #True
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
         self._smoothing = smoothing
@@ -276,8 +277,8 @@ class AdaScale(Optimizer):
             (float):
                 Estimate of gain ratio.
         """
-        if self._gain_invalid:
-            return 1.0
+        if self._gain_invalid[0] == 1:
+            return 0.0
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
         gain = (var + sqr) / (var / self.scale + sqr)
@@ -287,7 +288,7 @@ class AdaScale(Optimizer):
             return np.power(self.scale * self.scale * gain, 1./3)
         return gain
 
-    def gain(self, pg_idx: Optional[int] = None, power_law_ratio=0.618) -> float:
+    def gain(self, pg_idx: Optional[int] = None, power_law_ratio=0.5) -> float: #power_law_ratio=0.618) -> float:
         """
         Current estimate of the AdaScale gain ratio (r_t in the paper).
 
@@ -305,9 +306,8 @@ class AdaScale(Optimizer):
         # for tensorboard
         self.var = var
         self.sqr = sqr
-        if self._gain_invalid:
-            # in case there is no gain - we backoff to base case
-            return 1.0
+        if self._gain_invalid[0] == 1:
+            return 0.0
         max_scale = self.scale
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
@@ -326,7 +326,7 @@ class AdaScale(Optimizer):
         NOTE: that batch size used here is batch size that corresponds to scale 1.0
         """
         # TODO: compare numbers with original estimator in the paper
-        if self._gain_invalid:
+        if self._gain_invalid[0] == 1:
             return 0.0 # AS: return some value that makes gns unusable for this iteration
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
@@ -396,9 +396,11 @@ class AdaScale(Optimizer):
                 if param.grad is None or torch.any(torch.isnan(param.grad)):
                     continue
                 total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
+        
         # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
         # but just the piece that computes stats
-        total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
+        # total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
+        
         return total_grad_sqr
 
 
@@ -449,7 +451,6 @@ class AdaScale(Optimizer):
         # between the GPUs.
         self._final_callback_queued = False
         assert isinstance(self._local_grad_sqr, torch.Tensor)
-
         # Keep track of number of backward calls for gradient accumulation.
         self._num_backward_calls += 1
         assert (self._num_backward_calls - self._last_final_backward_call) <= self._num_grads_to_accum,\
@@ -462,7 +463,8 @@ class AdaScale(Optimizer):
         work = None
         # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
         # but just the piece that computes stats
-        self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
+        # self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
+        
         # we store the squared norm at local level before allreduce
         np_local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
         
@@ -478,9 +480,12 @@ class AdaScale(Optimizer):
             # use previous value
             for i, v in enumerate(self.local_grad_sqr):
                 self._local_grad_sqr[i] = self.local_grad_sqr[i]
-            print("OUTLIER detected ratio={}, reusing previous value".format(np.abs(np.log(np_local_grad_sqr[0]/self.local_grad_sqr[0]))))
+            print("OUTLIER detected ratio={}, skipping optimizer state update".format(np.abs(np.log(np_local_grad_sqr[0]/self.local_grad_sqr[0]))))
         else:
             self.local_grad_sqr = np_local_grad_sqr
+
+        print("rank:", self._rank, "local_grad_sqr:", np_local_grad_sqr)
+
 
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
@@ -522,23 +527,25 @@ class AdaScale(Optimizer):
         grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
         # grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr / (self._world_size * self._num_grads_to_accum - 1)
         grad_sqr = total_grad_sqr - grad_var / S
-        # grad_sqr = total_grad_sqr - grad_var / self._world_size
-        if self._rank == 5:
-            print("grad_var:", grad_var, "grad_sqr:", grad_sqr)
-        # grad_var = np.maximum(grad_var, 1e-11)
-        # grad_sqr = np.maximum(grad_sqr, 0.0)
 
         # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
         self.nonsmooth_var = grad_var
         self.nonsmooth_sqr = grad_sqr
 
-        self._gain_invalid = False
-        if np.any( grad_var <= 0.) or np.any( grad_sqr <= 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
+        self._gain_invalid[0] = 0
+        if found_outlier or np.any( grad_var <= 0.) or np.any( grad_sqr <= 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
             print('gradient inf/nan skipping update of moving averages of grad moments')
-            self._gain_invalid = True
+            self._gain_invalid[0] = 1
         else:
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
+        # an extra boolean sync here for checking if any of the worker stats blew up and skip update
+        if self._world_size > 1:
+            dist.all_reduce(self._gain_invalid)
+
+        if self._rank == 0:
+            print("rank:", self._rank, "grad_var:", grad_var, "grad_sqr:", grad_sqr, self._gain_invalid)
+
 
         # reset backward call counters for next param update cycle
         self._last_final_backward_call = self._num_backward_calls = 0
@@ -552,7 +559,7 @@ class AdaScale(Optimizer):
         ``optimizer.step(*args, **kwargs)`` with a scaled learning rate.
 
         .. note::
-
+ 
             It is possible that this function becames a performance
             bottleneck if you have frequent updates. To avoid that,
             making bigger steps and reducing update frequency is generally
@@ -701,4 +708,3 @@ class AdaScale(Optimizer):
             bias_correction = 1 - beta2 ** step
             pinv = (exp_avg_sq / bias_correction).sqrt().add_(eps)
             return pinv
-

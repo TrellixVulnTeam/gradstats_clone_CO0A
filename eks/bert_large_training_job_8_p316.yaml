@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "bert-adascale-128k-bs-job"
+  name: "bert-large-training-32k-job"
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -17,13 +17,13 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs_4node_debug.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/train_large_32k_gbs_8node_p316.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8
-                hugepages-2Mi: 5120Mi
+                # hugepages-2Mi: 5120Mi
                 memory: 384000Mi
-                vpc.amazonaws.com/efa: 1
+                # vpc.amazonaws.com/efa: 1
             volumeMounts:
             - name: persistent-volume
               mountPath: "/shared"
@@ -32,12 +32,12 @@ spec:
           volumes:
           - name: persistent-volume
             persistentVolumeClaim:
-              claimName: fsx-claim
+              claimName: fsx-claim-static
           - name: dshm
             emptyDir:
               medium: Memory
     Worker:
-      replicas: 3
+      replicas: 7
       restartPolicy: OnFailure
       template:
         spec:
@@ -49,13 +49,13 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/BERT && ./scripts/eks/adascale_128k_gbs_4node_debug.sh"
+            - "cd /gradstats/BERT && ./scripts/eks/train_large_32k_gbs_8node_p316.sh"
             resources:
               limits:
                 nvidia.com/gpu: 8
-                hugepages-2Mi: 5120Mi
+                # hugepages-2Mi: 5120Mi
                 memory: 384000Mi
-                vpc.amazonaws.com/efa: 1
+                # vpc.amazonaws.com/efa: 1
             volumeMounts:
             - name: persistent-volume
               mountPath: "/shared"
@@ -64,7 +64,7 @@ spec:
           volumes:
           - name: persistent-volume
             persistentVolumeClaim:
-              claimName: fsx-claim
+              claimName: fsx-claim-static
           - name: dshm
             emptyDir:
               medium: Memory

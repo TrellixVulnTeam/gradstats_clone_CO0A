@@ -88,11 +88,10 @@ def create_pretraining_dataset(input_file, max_pred_length, shared_list, args,
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data,
                                   sampler=train_sampler,
-                                  batch_size=args.train_batch_size *
-                                  args.n_gpu,
-                                  num_workers=12,
+                                  batch_size=args.train_batch_size * args.n_gpu,
+                                  num_workers=8,
                                   worker_init_fn=worker_init,
-                                  pin_memory=True)
+                                  pin_memory=False)#True)
     return train_dataloader, input_file
 
 
@@ -734,7 +733,7 @@ def main():
         adascale_step = args.scale_invariant_steps
         accumulate_gradients = args.gradient_accumulation_steps > 1
 
-        pool = ProcessPoolExecutor(12)
+        pool = ProcessPoolExecutor(1)
 
         # Note: We loop infinitely over epochs, termination is handled via iteration count
         while True:
@@ -765,6 +764,8 @@ def main():
                 # may not exist in all checkpoints
                 epoch = checkpoint.get('epoch', 0)
                 restored_data_loader = checkpoint.get('data_loader', None)
+                # if sampling with replacement shuffle files so that workers start from different points
+                random.Random(args.seed + epoch + get_rank()).shuffle(files)
 
             shared_file_list = {}
 
@@ -1008,7 +1009,7 @@ def main():
 
                                 most_recent_ckpts_paths.append(
                                     output_save_file)
-                                if len(most_recent_ckpts_paths) > 3:
+                                if len(most_recent_ckpts_paths) > 30:
                                     ckpt_to_be_removed = most_recent_ckpts_paths.pop(
                                         0)
                                     os.remove(ckpt_to_be_removed)
