@@ -21,9 +21,9 @@ spec:
             resources:
               limits:
                 nvidia.com/gpu: 8
-                hugepages-2Mi: 5120Mi
+                # hugepages-2Mi: 5120Mi
                 memory: 384000Mi
-                vpc.amazonaws.com/efa: 1
+                # vpc.amazonaws.com/efa: 1
             volumeMounts:
             - name: persistent-volume
               mountPath: "/shared"
@@ -32,7 +32,7 @@ spec:
           volumes:
           - name: persistent-volume
             persistentVolumeClaim:
-              claimName: fsx-claim
+              claimName: fsx-claim-static
           - name: dshm
             emptyDir:
               medium: Memory

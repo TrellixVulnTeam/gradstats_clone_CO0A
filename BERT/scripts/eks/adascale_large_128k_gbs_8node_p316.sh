@@ -13,17 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# setup NCCL to use EFA
-export FI_PROVIDER=efa
-export FI_EFA_TX_MIN_CREDITS=64
+# export FI_PROVIDER=efa
+# export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
-export RDMAV_FORK_SAFE=1
+# export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
 export NCCL_SOCKET_IFNAME=eth0
-export OMP_NUM_THREADS=96
+export OMP_NUM_THREADS=8
 
-# 32K batch settings for 32 GPUs
-train_batch_size=${1:-1024}
+# 128K batch settings for 64 GPUs - settings are same as 32K bs except for scale and batch size
+train_batch_size=${1:-2048}
 learning_rate=${2:-"5.9415e-4"}
 adamw_beta1=0.934271
 adamw_beta2=0.989295
@@ -38,28 +37,30 @@ save_checkpoint_steps=${7:-50}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-32}
-seed=${12:-72337}
+gradient_accumulation_steps=${11:-128}
+#seed=${12:-72337}
+seed=${12:-666}
 job_name=${13:-"bert_large_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"true"}
 # NOTE: this phase2 bs is different from NV training setup where phase2 bs is half of phase1
-train_batch_size_phase2=${16:-1024}
+# here we keep bs same for phase1 and phase2 to replicate Nado et al.
+train_batch_size_phase2=${16:-2048}
 learning_rate_phase2=${17:-"2.8464e-4"}
 adamw_phase2_beta1=0.963567
 adamw_phase2_beta2=0.952647
 adamw_phase2_weight_decay=0.31466
 warmup_proportion_phase2=${18:-"0.5"}
 train_steps_phase2=${19:-1562}
-gradient_accumulation_steps_phase2=${20:-128}
+gradient_accumulation_steps_phase2=${20:-512}
 sampling_with_replacement=${21:-"true"}
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/shared/benchmarking_datasets/nlp/BERT/phase1/ 
 BERT_CONFIG=/gradstats/BERT/bert_config.json
-DATASET2=books_wiki_en_corpus 
+DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/ 
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/1x_large_4node_fixed/
+RESULTS_DIR=/shared/export/BERT/4x_large_8node_debug/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
@@ -146,10 +147,13 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-#CMD+=" --enable_gns"
-#CMD+=" --use_adascale"
-#CMD+=" --lr_scale=2.0"
-#CMD+=" --gns_smoothing=0.25"
+CMD+=" --enable_gns"
+CMD+=" --use_adascale"
+CMD+=" --lr_scale=4.0"
+#CMD+=" --gns_smoothing=0.5"
+CMD+=" --gns_smoothing=0.1"
+#CMD+=" --resume_from_checkpoint"
+#CMD+=" --scale_invariant_steps=966"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -160,7 +164,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node_fixed "
+CMD+=" --label bert_training_large_128k_8node_debug "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -170,9 +174,9 @@ PROC_PER_NODE=8
 # MASTER_PORT_JOB=
  
 # setup NCCL to use EFA
-export FI_PROVIDER=efa
-export FI_EFA_TX_MIN_CREDITS=64
-export NCCL_DEBUG=INFO
+# export FI_PROVIDER=efa
+# export FI_EFA_TX_MIN_CREDITS=64
+# export NCCL_DEBUG=INFO
  
 # Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
@@ -187,7 +191,6 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
-
 if [ -z "$LOGFILE" ] ; then
    $CMD
 else
@@ -253,10 +256,11 @@ CMD+=" --adamw_eps=$adamw_eps"
 CMD+=" --lr_poly_power=$lr_poly_power"
 CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
-#CMD+=" --enable_gns"
-#CMD+=" --use_adascale"
-#CMD+=" --lr_scale=2.0"
-#CMD+=" --gns_smoothing=0.25"
+CMD+=" --enable_gns"
+CMD+=" --use_adascale"
+CMD+=" --lr_scale=4.0"
+#CMD+=" --gns_smoothing=0.5"
+CMD+=" --gns_smoothing=0.1"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -268,7 +272,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train --phase2 --resume_from_checkpoint " 
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_32k_4node_fixed "
+CMD+=" --label bert_training_large_128k_8node_debug "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 

@@ -1,0 +1,70 @@
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: "bert-large-training-32k-job"
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:bert" 
+            imagePullPolicy: Always
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/BERT && ./scripts/eks/train_large_32k_gbs_8node_p316.sh"
+            resources:
+              limits:
+                nvidia.com/gpu: 8
+                # hugepages-2Mi: 5120Mi
+                memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim-static
+          - name: dshm
+            emptyDir:
+              medium: Memory
+    Worker:
+      replicas: 7
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:bert" 
+            imagePullPolicy: Always
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/BERT && ./scripts/eks/train_large_32k_gbs_8node_p316.sh"
+            resources:
+              limits:
+                nvidia.com/gpu: 8
+                # hugepages-2Mi: 5120Mi
+                memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim-static
+          - name: dshm
+            emptyDir:
+              medium: Memory
