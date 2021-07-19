@@ -424,8 +424,8 @@ class AdaScale(Optimizer):
 
         # we want accum copies of local_grad_sqr per worker 
         if not grads_are_invalid:
-            self._local_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, grad) 
-
+            self._local_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, grad)
+            
         # Now, ensure we queue a callback at the end of the callback queue.
         # This will fire after all gradient callbacks are done (esp. those
         # queued by DDP.

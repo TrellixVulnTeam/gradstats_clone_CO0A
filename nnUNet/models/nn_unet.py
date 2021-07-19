@@ -19,10 +19,11 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+from torch import Tensor
 from torch.optim.optimizer import Optimizer
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 
-from fairscale.optim import AdaScale
+from automl.autoscaler import AdaScale
 from apex.optimizers import FusedAdam, FusedSGD
 from monai.inferers import sliding_window_inference
 from skimage.transform import resize
@@ -86,6 +87,26 @@ class NNUnet(pl.LightningModule):
         loss = self.loss(pred, lbl)
         self.cur_loss = loss
         return loss
+
+    def backward(self, loss: Tensor, optimizer: Optimizer, optimizer_idx: int) -> None:
+        """
+        Override backward with your own implementation if you need to.
+        Args:
+            loss: Loss is already scaled by accumulated grads
+            optimizer: Current optimizer being used
+            optimizer_idx: Index of the current optimizer being used
+        Called to perform backward step.
+        Feel free to override as needed.
+        The loss passed in has already been scaled for accumulated gradients if requested.
+        Example::
+            def backward(self, loss, optimizer, optimizer_idx):
+                loss.backward()
+        """
+        import time
+        start = time.time()
+        loss.backward()
+        duration = time.time() - start
+        print(f'backward time is {duration}')
 
     def validation_step(self, batch, batch_idx):
         if self.current_epoch < self.args.skip_first_n_eval:
@@ -359,7 +380,11 @@ class NNUnet(pl.LightningModule):
         if on_tpu:
             xm.optimizer_step(optimizer)
         elif using_native_amp:
+            import time
+            start = time.time()
             self.trainer.scaler.step(optimizer)
+            duration = time.time() - start
+            print(f" current optimizer time is {duration} ")
         elif using_lbfgs:
             optimizer.step(second_order_closure)
         else:
