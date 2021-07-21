@@ -73,6 +73,7 @@ class AdaScale(Optimizer):
         adjust_grads_for_accumulation = False,
         use_preconditioner = False,
         summary_writer=None,
+        model=None # for gradient clipping in case we detect overflows
     ):
         self._optimizer = optimizer
         self._local_grad_sqr: Optional[torch.Tensor] = None
@@ -93,7 +94,8 @@ class AdaScale(Optimizer):
         self.set_num_gradients_to_accumulate(num_gradients_to_accumulate, update_smoothing=smoothing is None)
         self._adjust_grads_for_accumulation = adjust_grads_for_accumulation
         self._use_preconditioner = use_preconditioner
-        self.summary_writer = summary_writer 
+        self.summary_writer = summary_writer
+        self._model = model
 
         if self._world_size * self._num_grads_to_accum <= 1:
             # gain will be NaN since we will be dividing by zero in paper's B.3 where (S-1) == 0.
@@ -277,8 +279,8 @@ class AdaScale(Optimizer):
             (float):
                 Estimate of gain ratio.
         """
-        if self._gain_invalid[0] == 1:
-            return 0.0
+        if self._gain_invalid[0] != 0:
+            return 0.0 # don't update model weights
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
         gain = (var + sqr) / (var / self.scale + sqr)
@@ -306,7 +308,7 @@ class AdaScale(Optimizer):
         # for tensorboard
         self.var = var
         self.sqr = sqr
-        if self._gain_invalid[0] == 1:
+        if self._gain_invalid[0] != 0:
             return 0.0
         max_scale = self.scale
         if self._is_adaptive:
@@ -326,7 +328,7 @@ class AdaScale(Optimizer):
         NOTE: that batch size used here is batch size that corresponds to scale 1.0
         """
         # TODO: compare numbers with original estimator in the paper
-        if self._gain_invalid[0] == 1:
+        if self._gain_invalid[0] != 0:
             return 0.0 # AS: return some value that makes gns unusable for this iteration
         # estimate of grad var for scale S
         var = self._grad_var_avg(pg_idx)
@@ -470,27 +472,28 @@ class AdaScale(Optimizer):
         
         # check for large outliers - don't apply to moving averages if "very" large
         found_outlier = False
-        SAFE_RATIO = 1.0
+        SAFE_RATIO = 10.0
         MIN_STEPS = 50
         if self.local_grad_sqr is None:
             self.local_grad_sqr = np_local_grad_sqr
-        # print("rank={}, latest={}, previous={}".format(self._rank, np_local_grad_sqr, self.local_grad_sqr))
-        if  self.steps > MIN_STEPS and self.local_grad_sqr[0] > 0.0 and np.abs(np.log10(np_local_grad_sqr[0]/self.local_grad_sqr[0])) > SAFE_RATIO:
+        print("rank={}, latest={}, previous={}".format(self._rank, np_local_grad_sqr, self.local_grad_sqr))
+        if  self.steps > MIN_STEPS and self.local_grad_sqr[0] > 0.0 and np_local_grad_sqr[0]/self.local_grad_sqr[0] > SAFE_RATIO:
             found_outlier = True
-            # use previous value
-            for i, v in enumerate(self.local_grad_sqr):
-                self._local_grad_sqr[i] = self.local_grad_sqr[i]
-            print("OUTLIER detected ratio={}, skipping optimizer state update".format(np.abs(np.log(np_local_grad_sqr[0]/self.local_grad_sqr[0]))))
-        else:
-            self.local_grad_sqr = np_local_grad_sqr
+            print("OUTLIER detected ratio={}, skipping optimizer state update".format(np_local_grad_sqr[0]/self.local_grad_sqr[0]))
+#            # use previous value
+#            for i, v in enumerate(self.local_grad_sqr):
+#                self._local_grad_sqr[i] = self.local_grad_sqr[i]
+#        else:
+#            self.local_grad_sqr = np_local_grad_sqr
+        self.local_grad_sqr = np_local_grad_sqr
 
-        print("rank:", self._rank, "local_grad_sqr:", np_local_grad_sqr)
 
 
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)  # SUM
 
         total_grad_sqr = self._total_grad_sqr()
+
         # Divide by (_num_grads_to_accum ** 2) to account for gradient
         # accumulation. Note that sometimes this factor is already taken care of in
         # loss calculation, so we do not need to adjust for accumulation divisor
@@ -534,14 +537,19 @@ class AdaScale(Optimizer):
 
         self._gain_invalid[0] = 0
         if found_outlier or np.any( grad_var <= 0.) or np.any( grad_sqr <= 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
-            print('gradient inf/nan skipping update of moving averages of grad moments')
+            print('local: gradient inf/nan skipping update of moving averages of grad moments')
             self._gain_invalid[0] = 1
-        else:
-            self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
-            self._update_avg("grad_var_avg", grad_var, self.smoothing)
+
         # an extra boolean sync here for checking if any of the worker stats blew up and skip update
         if self._world_size > 1:
             dist.all_reduce(self._gain_invalid)
+
+        # if grads are valid on all workers then update moving averages
+        if self._gain_invalid[0] == 0:
+            self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
+            self._update_avg("grad_var_avg", grad_var, self.smoothing)
+        else:
+            print('global: gradient inf/nan skipping update of moving averages of grad moments')
 
         if self._rank == 0:
             print("rank:", self._rank, "grad_var:", grad_var, "grad_sqr:", grad_sqr, self._gain_invalid)
@@ -585,7 +593,13 @@ class AdaScale(Optimizer):
         res = None
         # Step it.
         if self._scaler:
-            res = self._scaler.step(self._optimizer) #.step(*args, **kwargs)
+            # if self._gain_invalid[0] != 0 and self._model is not None:
+            #     print("STEPPING WHEN PROBLEMATIC", norm)
+            # FIXME: Google BERT uses grad norm clipping with Adam optimizer (missing in NV impl because it uses LAMB)
+            self._scaler.unscale_(self._optimizer)
+            norm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0) #TODO: pass as config
+            # if self._rank == 0: print("norm:", norm)
+            res = self._scaler.step(self._optimizer)
         else:
             self._optimizer.step(*args, **kwargs)
         # Restore the original LR.

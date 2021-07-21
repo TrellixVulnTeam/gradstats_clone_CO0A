@@ -623,7 +623,8 @@ def prepare_model_and_optimizer(args, device):
             smoothing=smoothing,
             scaler=scaler,
             use_preconditioner=args.use_preconditioner,
-            summary_writer=writer)
+            summary_writer=writer,
+            model=model)
 
         optimizer.set_scale(args.lr_scale)
 
@@ -811,7 +812,7 @@ def main():
                 # overwrite data file to look at current index
                 if args.sampling_with_replacement:
                     data_file = files[f_id]
-                    print("inside loop worker", get_rank(), data_file)
+                print("inside loop worker", get_rank(), data_file)
 
                 previous_file = data_file
 
