@@ -280,7 +280,8 @@ class AdaScale(Optimizer):
                 Estimate of gain ratio.
         """
         if self._gain_invalid[0] != 0:
-            return 0.0 # don't update model weights
+            # fallback to worst case of 1 SI step
+            return 1.0 
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
         gain = (var + sqr) / (var / self.scale + sqr)
@@ -309,7 +310,8 @@ class AdaScale(Optimizer):
         self.var = var
         self.sqr = sqr
         if self._gain_invalid[0] != 0:
-            return 0.0
+            # fallback to base schedule LR
+            return 1.0
         max_scale = self.scale
         if self._is_adaptive:
             max_scale = np.power(max_scale, power_law_ratio)
@@ -383,6 +385,7 @@ class AdaScale(Optimizer):
         curr_loss_scale_squared = self._current_loss_scale()**2
         preconditioner = self._calculate_preconditioner(pg_idx, param)
         divisor = preconditioner * curr_loss_scale_squared
+        # warn: nan_to_num can lead to sqr and var being produced as zeros during initial parts of training
         norm = torch.nan_to_num(torch.linalg.norm(grad.div(divisor)))
         return norm * norm
 
@@ -536,7 +539,8 @@ class AdaScale(Optimizer):
         self.nonsmooth_sqr = grad_sqr
 
         self._gain_invalid[0] = 0
-        if found_outlier or np.any( grad_var <= 0.) or np.any( grad_sqr <= 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
+
+        if found_outlier or np.any( grad_var <= 0.) or np.any( grad_sqr < 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
             print('local: gradient inf/nan skipping update of moving averages of grad moments')
             self._gain_invalid[0] = 1
 

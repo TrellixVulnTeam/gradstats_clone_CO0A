@@ -38,13 +38,11 @@ resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-128}
-#seed=${12:-72337}
-seed=${12:-666}
+seed=${12:-72337}
 job_name=${13:-"bert_large_adamw_pretraining"}
 allreduce_post_accumulation=${14:-"true"}
-# NOTE: this phase2 bs is different from NV training setup where phase2 bs is half of phase1
-# here we keep bs same for phase1 and phase2 to replicate Nado et al.
-train_batch_size_phase2=${16:-2048}
+# NOTE: this phase2 bs is 64K because of memory constraints, so unlike phase1 here scale is 2.0
+train_batch_size_phase2=${16:-1024}
 learning_rate_phase2=${17:-"2.8464e-4"}
 adamw_phase2_beta1=0.963567
 adamw_phase2_beta2=0.952647
@@ -53,6 +51,7 @@ warmup_proportion_phase2=${18:-"0.5"}
 train_steps_phase2=${19:-1562}
 gradient_accumulation_steps_phase2=${20:-512}
 sampling_with_replacement=${21:-"true"}
+#sampling_with_replacement=${21:-"false"}
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/shared/benchmarking_datasets/nlp/BERT/phase1/ 
 BERT_CONFIG=/gradstats/BERT/bert_config.json
@@ -60,7 +59,7 @@ DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/shared/benchmarking_datasets/nlp/BERT/phase2/ 
 CODEDIR=${23:-"/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/shared/export/BERT/4x_large_8node_debug/
+RESULTS_DIR=/shared/export/BERT/4x_large_8node_debug_clipping_large_safe/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
@@ -152,8 +151,8 @@ CMD+=" --use_adascale"
 CMD+=" --lr_scale=4.0"
 #CMD+=" --gns_smoothing=0.5"
 CMD+=" --gns_smoothing=0.1"
-#CMD+=" --resume_from_checkpoint"
-#CMD+=" --scale_invariant_steps=966"
+CMD+=" --resume_from_checkpoint"
+CMD+=" --scale_invariant_steps=10963"
 CMD+=" $PREC"
 CMD+=" $ACCUMULATE_GRADIENTS"
 CMD+=" $CHECKPOINT"
@@ -164,7 +163,7 @@ CMD+=" $SAMPLING_WITH_REPLACEMENT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_128k_8node_debug "
+CMD+=" --label bert_training_large_128k_8node_debug_clipping_large_safe "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
 # WORLD_SIZE=
 # RANK=
@@ -191,13 +190,13 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
-if [ -z "$LOGFILE" ] ; then
-   $CMD
-else
-   (
-     $CMD
-   ) |& tee $LOGFILE
-fi
+# if [ -z "$LOGFILE" ] ; then
+#    $CMD
+# else
+#    (
+#      $CMD
+#    ) |& tee $LOGFILE
+# fi
 
 set +x
 
@@ -258,7 +257,7 @@ CMD+=" --seed=$seed"
 CMD+=" --disable_progress_bar"
 CMD+=" --enable_gns"
 CMD+=" --use_adascale"
-CMD+=" --lr_scale=4.0"
+CMD+=" --lr_scale=2.0"
 #CMD+=" --gns_smoothing=0.5"
 CMD+=" --gns_smoothing=0.1"
 CMD+=" $PREC"
@@ -269,10 +268,10 @@ CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
 CMD+=" $SAMPLING_WITH_REPLACEMENT"
 #CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
 # resume from latest ckpt
-CMD+=" --do_train --phase2 --resume_from_checkpoint " 
+CMD+=" --do_train --phase2 --resume_from_checkpoint --scale_invariant_steps=1211 --phase1_end_step=6577"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --use_preconditioner "
-CMD+=" --label bert_training_large_128k_8node_debug "
+CMD+=" --label bert_training_large_128k_8node_debug_clipping_large_safe "
 
 CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
 

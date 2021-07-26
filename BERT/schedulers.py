@@ -133,6 +133,7 @@ class PolyWarmUpScheduler(LRScheduler):
         if progress < self.warmup:
             warmup_percentage_completion = progress / self.warmup
             if self.do_poly_warmup:
+                # print(self.base_lrs, warmup_percentage_completion, self.degree)
                 return [base_lr * warmup_percentage_completion ** self.degree for base_lr in self.base_lrs]
             else:
                 return [base_lr * warmup_percentage_completion for base_lr in self.base_lrs]
