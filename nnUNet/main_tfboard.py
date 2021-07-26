@@ -83,6 +83,7 @@ if __name__ == "__main__":
     trainer = AdaTrainer(
         logger=False,
         gpus=args.gpus,
+        num_nodes=args.num_nodes,
         precision=16 if args.amp else 32,
         benchmark=True,
         deterministic=False,

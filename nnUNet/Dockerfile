@@ -1,8 +1,13 @@
-ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:21.02-py3
-FROM ${FROM_IMAGE_NAME}
+#ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:21.02-py3
+#FROM ${FROM_IMAGE_NAME}
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
 
 ADD . /workspace/nnunet_pyt
 WORKDIR /workspace/nnunet_pyt
+
+#COPY autoscaler /workspace/nnunet_pyt
+RUN pip install /workspace/nnunet_pyt/autoscaler 
+RUN pip install scikit-image
 
 RUN pip install --upgrade pip
 RUN pip install --disable-pip-version-check -r requirements.txt
@@ -18,6 +23,9 @@ RUN rm -rf awscliv2.zip aws
 
 # Install Perf Client required library
 RUN apt-get update && apt-get install -y libb64-dev libb64-0d
+
+RUN git clone https://github.com/NVIDIA/PyProf.git && pip install ./PyProf
+RUN pip install tensorboard
 
 # Install Triton Client Python API and copy Perf Client
 #COPY --from=triton-client /workspace/install/ /workspace/install/

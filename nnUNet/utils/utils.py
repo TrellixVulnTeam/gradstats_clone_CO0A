@@ -218,6 +218,7 @@ def get_main_args(strings=None):
         default="train",
         help="Execution mode to run the model",
     )
+    arg('--num_nodes', type=int, default=1, help='Number of nodes')
     arg('--enable_gns',
         default=False,
         action='store_true',

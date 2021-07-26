@@ -1,8 +1,6 @@
-ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:21.02-py3
-FROM ${FROM_IMAGE_NAME}
-
-ADD . /workspace/nnunet_pyt
-WORKDIR /workspace/nnunet_pyt
+#ARG FROM_IMAGE_NAME=nvcr.io/nvidia/pytorch:21.02-py3
+#FROM ${FROM_IMAGE_NAME}
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
 
 RUN pip install --upgrade pip
 RUN pip install --disable-pip-version-check -r requirements.txt

@@ -2,6 +2,7 @@ import argparse
 import logging
 import sagemaker
 from sagemaker.pytorch import PyTorch
+from sagemaker.session import TrainingInput
 
 logger = logging.getLogger(__name__)
 
@@ -9,13 +10,14 @@ def main():
     parser = argparse.ArgumentParser(description='run training')
     parser.add_argument('--model_type', type=str, default='unet_2d')
     parser.add_argument('--platform', type=str, default='SM', help='SM(sagemaker) or EC2')
-    parser.add_argument('--num_nodes', type=int, default=1, help='Number of nodes')
+    parser.add_argument('--num_nodes', type=int, default=2, help='Number of nodes')
     parser.add_argument('--node_type', type=str, default='ml.p3.16xlarge', help='Node type')
     #parser.add_argument('--node_type', type=str, default='ml.p3dn.24xlarge', help='Node type')
     parser.add_argument('--bucket_name', type=str, default='yuliu-dev-east-gryffindor')
+    parser.add_argument('--training_s3', type=str, default='s3://mzanur-autoscaler/benchmarking_datasets/MSD/preprocessed/01_2d')
     parser.add_argument('--output_dir', type=str, default='unet_res')
     parser.add_argument("--image_uri", type=str,
-                        default='427566855058.dkr.ecr.us-east-1.amazonaws.com/unet:latest')
+                        default='427566855058.dkr.ecr.us-east-1.amazonaws.com/unet:aws-unet')
 
     args = parser.parse_args()
 
@@ -48,7 +50,8 @@ def main():
                         max_run=259200
                         )
 
-    estimator.fit()
+    train_input = TrainingInput(args.training_s3)
+    estimator.fit({"train": train_input}, wait=True)
     print('end of the whole process')
 
 if __name__ == "__main__":
