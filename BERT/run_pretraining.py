@@ -623,7 +623,8 @@ def prepare_model_and_optimizer(args, device):
             smoothing=smoothing,
             scaler=scaler,
             use_preconditioner=args.use_preconditioner,
-            summary_writer=writer)
+            summary_writer=writer,
+            model=model)
 
         optimizer.set_scale(args.lr_scale)
 
@@ -811,7 +812,7 @@ def main():
                 # overwrite data file to look at current index
                 if args.sampling_with_replacement:
                     data_file = files[f_id]
-                    print("inside loop worker", get_rank(), data_file)
+                print("inside loop worker", get_rank(), data_file)
 
                 previous_file = data_file
 
@@ -870,13 +871,12 @@ def main():
                     # this is loss for 1 batch and we do this grad accumulation times before
                     # stepping the optimizer
                     if accumulate_gradients and not is_last_accumulation_step:
-                        with model.no_sync(
-                        ):  # for this to work correctly ensure that loss calc is in similar context
+                        with model.no_sync():
+                            # for this to work correctly ensure that loss calc is in similar context
                             scaler.scale(loss).backward()
                     else:
                         scaler.scale(loss).backward()
                     average_loss += loss.item()
-
                     # take one optimizer step for gradient accumulation steps
                     if training_steps % args.gradient_accumulation_steps == 0:
                         ####### GNS/ADASCALE METRICS #########
@@ -890,9 +890,6 @@ def main():
                             new_steps = math.floor(adascale_step)
                             scale_invariant_steps = new_steps - prev_steps
                             lr_scheduler.step(step_increment=scale_invariant_steps)
-                            # progress optimizer state so that scheduler 'step' updates count correctly
-                            # HACK FIXME: note the `-1` below, this is because optimizer.step increments by 1 as well
-                            optimizer.param_groups[0]['step'] = lr_scheduler.last_epoch - 1
                             # FIXME: For some reason at the first iteration the optimizer lr states do not get synced so force that here
                             optimizer._optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']
                         else:
