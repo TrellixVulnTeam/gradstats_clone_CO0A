@@ -624,7 +624,8 @@ def prepare_model_and_optimizer(args, device):
             scaler=scaler,
             use_preconditioner=args.use_preconditioner,
             summary_writer=writer,
-            model=model)
+            model=model,
+            max_grad_norm=5.0)
 
         optimizer.set_scale(args.lr_scale)
 

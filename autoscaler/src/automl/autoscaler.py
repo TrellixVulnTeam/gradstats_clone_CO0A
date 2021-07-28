@@ -58,7 +58,6 @@ class AdaScale(Optimizer):
         is_adaptive (bool):
             True if using adaptive first order optimizer, currently supports NovoGrad
     """
-
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
@@ -73,6 +72,7 @@ class AdaScale(Optimizer):
         adjust_grads_for_accumulation = False,
         use_preconditioner = False,
         summary_writer=None,
+        max_grad_norm=0.0,
         model=None # for gradient clipping in case we detect overflows
     ):
         self._optimizer = optimizer
@@ -129,6 +129,8 @@ class AdaScale(Optimizer):
         self.local_grad_sqr = None
         # WIP - steps (should be part of state) - maybe we should track steps inside this class - CHECK
         self.steps = 0
+        self._max_grad_norm = max_grad_norm
+        assert self._max_grad_norm == 0.0 or (self._max_grad_norm > 0.0 and self._model is not None)
 
     def _hook(self) -> None:
         """ Internal function to register the gradient hooks.
@@ -597,12 +599,10 @@ class AdaScale(Optimizer):
         res = None
         # Step it.
         if self._scaler:
-            # if self._gain_invalid[0] != 0 and self._model is not None:
-            #     print("STEPPING WHEN PROBLEMATIC", norm)
-            # FIXME: Google BERT uses grad norm clipping with Adam optimizer (missing in NV impl because it uses LAMB)
-            self._scaler.unscale_(self._optimizer)
-            norm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=5.0) #TODO: pass as config
-            # if self._rank == 0: print("norm:", norm)
+            if self._max_grad_norm > 0.0:
+                # Google BERT uses grad norm clipping with Adam optimizer
+                self._scaler.unscale_(self._optimizer)
+                norm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=self._max_grad_norm)
             res = self._scaler.step(self._optimizer)
         else:
             self._optimizer.step(*args, **kwargs)
