@@ -121,7 +121,13 @@ class PolyWarmUpScheduler(LRScheduler):
         """
         param_group = self.optimizer.param_groups[0]
         if 'step' in param_group:
-            self.last_epoch = param_group['step'] + step_increment
+            #self.last_epoch = param_group['step'] + step_increment
+            # param_group['step'] is driven by the optimizer step and
+            # corresponds to step incrementing by 1 on each call, but
+            # last_epoch here is tracking the scale invariant steps to
+            # get LR schedule so changing as follows
+            # self.last_epoch = param_group['step'] + step_increment
+            self.last_epoch += step_increment
         else:
             self.last_epoch = 1
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
