@@ -37,21 +37,21 @@ if __name__ == "__main__":
               f"--exec_mode train " \
               f"--task 01 " \
               f"--fold 0 " \
-              f"--gpus 8 " \
+              f"--gpus {num_gpus} " \
               f"--data {train_data_path} " \
               f"--results . " \
               f"--num_nodes {args.num_nodes} " \
               f"--amp " \
-              f"--num_workers 12 " \
+              f"--num_workers 8 " \
               f"--batch_size 64 " \
               f"--val_batch_size 64 " \
               f"--learning_rate 0.001 " \
               f"--optimizer adam " \
-              f"--enable_adascale " \
               f"--lr_scale 6.0 " \
               f"--dim 2 " \
-              f"--label unet_6x_adam_adascale_fold0_adaptive-off_run1 " \
-              f"| tee {args.output_dir}unet_6x_adam_adascale_fold0_adaptive-off_run1.log"
+              f"--label unet_6x_adam_adascale_fold0_adaptive-off_run1 "
+              # f"| tee {args.output_dir}unet_6x_adam_adascale_fold0_adaptive-off_run1.log"
+        cmd += f"--enable_adascale "
 
         try:
             sb.Popen(cmd, shell=True)
