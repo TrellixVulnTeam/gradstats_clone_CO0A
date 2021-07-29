@@ -644,18 +644,14 @@ def prepare_model_and_optimizer(args, device):
             #Override hyperparameters from previous checkpoint
             for key in keys:
                 checkpoint['optimizer']['state'][key]['step'] = global_step
-            for iter, item in enumerate(
-                    checkpoint['optimizer']['param_groups']):
-                checkpoint['optimizer']['param_groups'][iter][
-                    'step'] = global_step
-                checkpoint['optimizer']['param_groups'][iter][
-                    't_total'] = args.max_steps
-                checkpoint['optimizer']['param_groups'][iter][
-                    'warmup'] = args.warmup_proportion
-                checkpoint['optimizer']['param_groups'][iter][
-                    'lr'] = args.learning_rate
+            for iter, item in enumerate(checkpoint['optimizer']['param_groups']):
+                checkpoint['optimizer']['param_groups'][iter]['step'] = global_step
+                checkpoint['optimizer']['param_groups'][iter]['t_total'] = args.max_steps
+                checkpoint['optimizer']['param_groups'][iter]['warmup'] = args.warmup_proportion
+                checkpoint['optimizer']['param_groups'][iter]['lr'] = args.learning_rate
         optimizer.load_state_dict(checkpoint['optimizer'])  # , strict=False)
-
+        #FIXME: find better way to resume after restart
+        lr_scheduler.last_epoch=args.scale_invariant_steps
         # Restore AMP master parameters
         if args.fp16:
             scaler.load_state_dict(checkpoint['scaler'])

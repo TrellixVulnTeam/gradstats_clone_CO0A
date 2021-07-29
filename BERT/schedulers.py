@@ -129,7 +129,8 @@ class PolyWarmUpScheduler(LRScheduler):
             # self.last_epoch = param_group['step'] + step_increment
             self.last_epoch += step_increment
         else:
-            self.last_epoch = 1
+            if self.last_epoch < 1:
+                self.last_epoch = 1
         for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
             param_group['lr'] = lr
 
