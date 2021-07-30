@@ -18,11 +18,11 @@ set -e
 echo "Container nvidia build = " $NVIDIA_BUILD_ID
 
 init_checkpoint=${1:-"/shared/export/BERT/4x_large_8node_debug_clipping_large_safe/checkpoints/ckpt_7535.pt"}
-data_dir=${2:-"/shared/benchmarking_datasets/nlp/GLUE/MRPC/"}
+data_dir=${2:-"/shared/benchmarking_datasets/nlp/GLUE/SST-2/"}
 vocab_file=${3:-"/shared/benchmarking_datasets/nlp/SQUAD/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
 config_file=${4:-"/gradstats/BERT/bert_config.json"}
-out_dir=${5:-"/shared/export/BERT/4x_large_8node_debug_clipping_large_safe/results/MRPC"}
-task_name=${6:-"mrpc"}
+out_dir=${5:-"/shared/export/BERT/4x_large_8node_debug_clipping_large_safe/results/SST-2"}
+task_name=${6:-"sst-2"}
 num_gpu=${7:-"8"}
 batch_size=${8:-"16"}
 gradient_accumulation_steps=${9:-"1"}
