@@ -14,7 +14,8 @@ def main():
     #parser.add_argument('--node_type', type=str, default='ml.p3dn.24xlarge', help='Node type')
     #parser.add_argument('--node_type', type=str, default='ml.p4d.24xlarge', help='Node type')
     parser.add_argument('--bucket_name', type=str, default='yuliu-dev-east-gryffindor')
-    parser.add_argument('--training_s3', type=str, default='s3://mzanur-autoscaler/benchmarking_datasets/MSD/preprocessed/01_2d')
+    parser.add_argument('--training_s3', type=str, 
+                        default='s3://mzanur-autoscaler/benchmarking_datasets/MSD/preprocessed/01_2d')
     parser.add_argument('--output_dir', type=str, default='unet_res')
     parser.add_argument("--image_uri", type=str,
                         default='427566855058.dkr.ecr.us-east-1.amazonaws.com/unet:aws-unet')

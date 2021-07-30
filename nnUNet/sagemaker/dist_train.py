@@ -14,15 +14,36 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=str, default='1234', help='master port to use')
     parser.add_argument('--model_type', type=str, default='unet_2d')
     parser.add_argument('--platform', type=str, default='SM')
-
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--optimizer', type=str, choices=['adam', 'radam', 'sgd'], default='adam')
+    parser.add_argument("--label", type=str, default="net_training_t0", help="name of tensorboard s3 bucket folder")
+    # adascale related
+    parser.add_argument('--enable_adascale',
+        default=False,
+        action='store_true',
+        help='Enable adascale module for training run')
+    parser.add_argument('--lr_scale',
+        type=float,
+        default=1.0,
+        help='Batch scaling factor for AdaScale.')
+    parser.add_argument('--enable_gns',
+        default=False,
+        action='store_true',
+        help='Enable gradient noise scale measurement for training run')
+    parser.add_argument('--gns_smoothing',
+        type=float,
+        default=0.0,
+        help='Smoothing factor for gradient stats.')
+    
     args = parser.parse_args()
     os.environ['NCCL_DEBUG'] = 'INFO'
-    # os.environ['NCCL_SOCKET_IFNAME'] = 'ens5'
     # environment prameter parsed from sagemaker
     num_gpus = int(os.environ["SM_NUM_GPUS"])
     hosts = json.loads(os.environ["SM_HOSTS"])
     current_host = os.environ["SM_CURRENT_HOST"]
     rank = hosts.index(current_host)
+    num_workers = int(os.environ["SM_NUM_CPUS"]) // num_gpus
     print(f'current node rank is {rank}')
     os.environ['MASTER_ADDR'] = hosts[0]
     os.environ['MASTER_PORT'] = args.port
@@ -42,16 +63,18 @@ if __name__ == "__main__":
               f"--results . " \
               f"--num_nodes {args.num_nodes} " \
               f"--amp " \
-              f"--num_workers 8 " \
-              f"--batch_size 64 " \
+              f"--num_workers {num_workers} " \
+              f"--batch_size {args.batch_size} " \
               f"--val_batch_size 64 " \
-              f"--learning_rate 0.001 " \
-              f"--optimizer adam " \
-              f"--lr_scale 6.0 " \
+              f"--learning_rate {args.learning_rate} " \
+              f"--optimizer {args.optimizer} " \
+              f"--lr_scale {args.lr_scale} " \
               f"--dim 2 " \
-              f"--label unet_6x_adam_adascale_fold0_adaptive-off_run1 "
-              # f"| tee {args.output_dir}unet_6x_adam_adascale_fold0_adaptive-off_run1.log"
-        cmd += f"--enable_adascale "
+              f"--label  {args.label} "
+        if args.enable_adascale:
+            cmd += f" --enable_adascale "
+        if args.enable_gns:
+            cmd += f" --enable_gns "
 
         try:
             sb.Popen(cmd, shell=True)
