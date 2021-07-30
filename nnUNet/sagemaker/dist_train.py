@@ -17,20 +17,14 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--learning_rate', type=float, default=0.001)
     parser.add_argument('--optimizer', type=str, choices=['adam', 'radam', 'sgd'], default='adam')
-    parser.add_argument("--label", type=str, default="net_training_t0", help="name of tensorboard s3 bucket folder")
+    parser.add_argument("--label", type=str, default="unet_train", help="name of results folder and sagemaker job")
     # adascale related
-    parser.add_argument('--enable_adascale',
-        default=False,
-        action='store_true',
-        help='Enable adascale module for training run')
+    parser.add_argument('--enable_adascale', type=str, choices=['True', 'False'], default='False')
     parser.add_argument('--lr_scale',
         type=float,
         default=1.0,
         help='Batch scaling factor for AdaScale.')
-    parser.add_argument('--enable_gns',
-        default=False,
-        action='store_true',
-        help='Enable gradient noise scale measurement for training run')
+    parser.add_argument('--enable_gns', type=str, choices=['True', 'False'], default='False')
     parser.add_argument('--gns_smoothing',
         type=float,
         default=0.0,
@@ -68,13 +62,12 @@ if __name__ == "__main__":
               f"--val_batch_size 64 " \
               f"--learning_rate {args.learning_rate} " \
               f"--optimizer {args.optimizer} " \
-              f"--lr_scale {args.lr_scale} " \
               f"--dim 2 " \
               f"--label  {args.label} "
-        if args.enable_adascale:
-            cmd += f" --enable_adascale "
-        if args.enable_gns:
-            cmd += f" --enable_gns "
+        if args.enable_adascale == "True":
+            cmd += f" --enable_adascale --lr_scale {args.lr_scale} "
+        if args.enable_gns == "True":
+            cmd += f" --enable_gns --gns_smoothing {args.gns_smoothing} "
 
         try:
             sb.Popen(cmd, shell=True)
