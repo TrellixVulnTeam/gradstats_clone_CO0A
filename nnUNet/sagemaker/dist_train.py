@@ -63,7 +63,7 @@ if __name__ == "__main__":
               f"--learning_rate {args.learning_rate} " \
               f"--optimizer {args.optimizer} " \
               f"--dim 2 " \
-              f"--label  {args.label} "
+              f"--label {args.label} "
         if args.enable_adascale == "True":
             cmd += f" --enable_adascale --lr_scale {args.lr_scale} "
         if args.enable_gns == "True":

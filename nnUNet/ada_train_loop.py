@@ -9,6 +9,8 @@ from torch.utils.tensorboard import SummaryWriter
 from copy import deepcopy
 from utils.utils import upload_dir
 
+import math
+
 def get_world_size():
     if not dist.is_available():
         return 1
@@ -107,7 +109,7 @@ class AdaTrainLoop(TrainLoop):
         train_dataloader = self.trainer.data_connector.get_profiled_train_dataloader(train_dataloader)
         dataloader_idx = 0
         should_check_val = False
-        self.trainer.num_training_batches = 9
+        self.trainer.num_training_batches = math.ceil(49 / (self.trainer.args.batch_size / 64))
         self.trainer.scale_one_bs = int(
             self.trainer.args.batch_size * get_world_size() // self.trainer.args.lr_scale)  # multiply by world size to account for division earlier
         self.trainer.scale_one_steps_per_epoch = int(
@@ -123,8 +125,10 @@ class AdaTrainLoop(TrainLoop):
             # ------------------------------------
             # TRAINING_STEP + TRAINING_STEP_END
             # ------------------------------------
+            print("****************")
+            print(f"the batch shape is {batch.shape}.")
             batch_output = self.run_training_batch(batch, batch_idx, dataloader_idx)
-
+            
             # when returning -1 from train_step, we end epoch early
             if batch_output.signal == -1:
                 break

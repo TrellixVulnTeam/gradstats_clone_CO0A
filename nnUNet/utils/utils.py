@@ -237,7 +237,7 @@ def get_main_args(strings=None):
         help='Smoothing factor for gradient stats.')
     arg("--log_dir", type=str, default="./tfboard_log", help="Path to tensorboard directory")
     arg("--label", type=str, default="net_training_t0", help="name of tensorboard s3 bucket folder")
-    arg("--bucket", type=str, default="mzanur-autoscaler", help="name of tensorboard s3 bucket folder")
+    arg("--bucket", type=str, default="yuliu-dev-east-gryffindor", help="name of tensorboard s3 bucket folder")
     arg("--data", type=str, default="/data", help="Path to data directory")
     arg("--results", type=str, default="/results", help="Path to results directory")
     arg("--logname", type=str, default=None, help="Name of dlloger output")

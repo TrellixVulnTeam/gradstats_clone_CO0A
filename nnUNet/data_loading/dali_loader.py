@@ -40,7 +40,7 @@ def get_numpy_reader(files, shard_id, num_shards, seed, shuffle):
 
 class TrainPipeline(Pipeline):
     def __init__(self, batch_size, num_threads, device_id, **kwargs):
-        super(TrainPipeline, self).__init__(batch_size, num_threads, device_id)
+        super(TrainPipeline, self).__init__(batch_size, num_threads, device_id, seed=kwargs["seed"])
         self.dim = kwargs["dim"]
         self.oversampling = kwargs["oversampling"]
         self.input_x = get_numpy_reader(
@@ -138,7 +138,7 @@ class TrainPipeline(Pipeline):
 
 class EvalPipeline(Pipeline):
     def __init__(self, batch_size, num_threads, device_id, **kwargs):
-        super(EvalPipeline, self).__init__(batch_size, num_threads, device_id)
+        super(EvalPipeline, self).__init__(batch_size, num_threads, device_id, seed=kwargs["seed"])
         self.input_x = get_numpy_reader(
             files=kwargs["imgs"],
             shard_id=device_id,
@@ -162,7 +162,7 @@ class EvalPipeline(Pipeline):
 
 class BermudaPipeline(Pipeline):
     def __init__(self, batch_size, num_threads, device_id, **kwargs):
-        super(BermudaPipeline, self).__init__(batch_size, num_threads, device_id)
+        super(BermudaPipeline, self).__init__(batch_size, num_threads, device_id, seed=kwargs["seed"])
         self.input_x = get_numpy_reader(
             files=kwargs["imgs"],
             shard_id=device_id,
@@ -193,7 +193,7 @@ class BermudaPipeline(Pipeline):
 
 class TestPipeline(Pipeline):
     def __init__(self, batch_size, num_threads, device_id, **kwargs):
-        super(TestPipeline, self).__init__(batch_size, num_threads, device_id)
+        super(TestPipeline, self).__init__(batch_size, num_threads, device_id, seed=kwargs["seed"])
         self.input_x = get_numpy_reader(
             files=kwargs["imgs"],
             shard_id=device_id,
