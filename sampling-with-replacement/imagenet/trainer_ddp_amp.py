@@ -502,14 +502,18 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
     images, target = prefetcher.next()
     i = 0
     adascale_step = 0
+    print("====>", scale_one_steps_per_epoch, args.batch_size, get_world_size())
     while images is not None:
         global_step += 1
         # `i` below will be progressed as per Adascale gain
         # i += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        if i > scale_one_steps_per_epoch:
+        if i >= scale_one_steps_per_epoch:
             break
+
+        if get_rank() == 0:
+            print("====>", i)
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -545,7 +549,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
             # modify step according to gain
             optimizer.step()
         else:
-            i = global_step
+            i = global_step % (scale_one_steps_per_epoch+1)
             scaler.step(optimizer)
 
         scaler.update()
