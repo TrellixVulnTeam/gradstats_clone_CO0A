@@ -515,7 +515,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
 
     progress = ProgressMeter(scale_one_steps_per_epoch,
                              [batch_time, data_time, losses, top1, top5],
-                             prefix="Epoch: [{}]".format(epoch))
+                             prefix="Epoch (SI steps based): [{}]".format(epoch))
 
     # switch to train mode
     model.train()
@@ -524,15 +524,13 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
     prefetcher = data_prefetcher(train_loader)
     images, target = prefetcher.next()
     i = 0
+    scheduler_progress = 0
     while images is not None:
         global_step += 1
-        # `i` below will be progressed as per Adascale gain
-        # i += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
         if i >= scale_one_steps_per_epoch:
             break
-
 
         # measure data loading time
         data_time.update(time.time() - end)
@@ -553,10 +551,12 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         scaler.scale(loss).backward()
 
         if args.enable_autoscaler:
-            i += optimizer.get_step_increment()
+            scheduler_progress = optimizer.get_step_increment()
+            i += scheduler_progress
             optimizer.step()
         else:
             i = global_step % (scale_one_steps_per_epoch+1)
+            scheduler_progress = 1
             scaler.step(optimizer)
 
         scaler.update()
@@ -572,7 +572,9 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
 
         if global_step % args.print_freq == 0 and get_rank() == 0:
             progress.display(i)
-            print("=> gain {} gns {}".format(optimizer.gain(), optimizer.gns()))
+            gain = optimizer.gain()
+            effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
+            print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
             # tensorboard summaries are logged based on scale invariant iterations
             # so that we can compare runs (loss values at the same logical stage)
             tensorboard_step = scale_one_steps_per_epoch * epoch + i

@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "resnet50-job"
+  name: "resnet50-autoscaler-job"
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -17,13 +17,13 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/sampling-with-replacement/imagenet && scripts/eks/launch_training_adascale.sh 8192"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024"
             resources:
               limits:
-                nvidia.com/gpu: 8
-                hugepages-2Mi: 5120Mi
-                memory: 384000Mi
-                vpc.amazonaws.com/efa: 1
+                nvidia.com/gpu: 4
+                # hugepages-2Mi: 5120Mi
+                # memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
             volumeMounts:
             - name: persistent-volume
               mountPath: "/shared"
@@ -49,13 +49,13 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/sampling-with-replacement/imagenet && scripts/eks/launch_training_adascale.sh 8192"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024"
             resources:
               limits:
-                nvidia.com/gpu: 8
-                hugepages-2Mi: 5120Mi
-                memory: 384000Mi
-                vpc.amazonaws.com/efa: 1
+                nvidia.com/gpu: 4
+                # hugepages-2Mi: 5120Mi
+                # memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
             volumeMounts:
             - name: persistent-volume
               mountPath: "/shared"

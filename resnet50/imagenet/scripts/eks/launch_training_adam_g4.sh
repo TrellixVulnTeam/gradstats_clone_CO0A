@@ -12,7 +12,7 @@ export OMP_NUM_THREADS=48
 train_batch_size=${1:-256}
 learning_rate=${2:-"0.001"}
 enable_amp=${3:-"--amp"}
-num_gpus=${4:-8}
+num_gpus=${4:-4}
 resume_training=${5:-"false"}
 NHWC=${6:-"--channels-last"}
 ARCH=${7:-"resnet50"}
@@ -30,7 +30,7 @@ if [ ! -d "$RESULTS_DIR" ] ; then
    mkdir -p $RESULTS_DIR
 fi
 
-CMD=" $CODEDIR/trainer_ddp_refactor.py"
+CMD=" $CODEDIR/trainer_ddp_amp.py"
 CMD+=" -a $ARCH"
 CMD+=" $DATA_DIR"
 CMD+=" --batch-size $train_batch_size"
