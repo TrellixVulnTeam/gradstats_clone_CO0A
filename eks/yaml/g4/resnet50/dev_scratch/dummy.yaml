@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "dev-2-job"
+  name: "dev-job"
 spec:
   pytorchReplicaSpecs:
     Master:

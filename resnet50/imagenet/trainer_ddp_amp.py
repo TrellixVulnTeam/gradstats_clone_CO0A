@@ -333,6 +333,8 @@ def main_worker(args):
         optimizer = AdaScale(
             optimizer,
             autoscaler_cfg_path=args.autoscaler_cfg,
+            batch_size=args.batch_size,
+            model=model,
             scaler=scaler,
             summary_writer=writer)
 

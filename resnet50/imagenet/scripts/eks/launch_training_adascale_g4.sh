@@ -10,14 +10,15 @@ export NCCL_SOCKET_IFNAME=eth0
 export OMP_NUM_THREADS=48
 
 train_batch_size=${1:-32}
-learning_rate=${2:-"0.001"}
-enable_amp=${3:-"--amp"}
-num_gpus=${4:-4}
-resume_training=${5:-"false"}
-NHWC=${6:-"--channels-last"}
-ARCH=${7:-"resnet50"}
-NUM_WORKERS=${8:-12}
-TOTAL_EPOCHS=${9:-90}
+label=${2:-"resnet_dev_adascale"}
+learning_rate=${3:-"0.001"}
+enable_amp=${4:-"--amp"}
+num_gpus=${5:-4}
+resume_training=${6:-"false"}
+NHWC=${7:-"--channels-last"}
+ARCH=${8:-"resnet50"}
+NUM_WORKERS=${9:-12}
+TOTAL_EPOCHS=${10:-90}
 create_logfile="true"
 DATA_DIR="/shared/benchmarking_datasets/imagenet/processed"
 CODEDIR="/gradstats/resnet50/imagenet"
@@ -39,10 +40,10 @@ CMD+=" $enable_amp"
 CMD+=" --optimizer AdamW"
 CMD+=" --lr $learning_rate"
 CMD+=" --weight-decay 0.1"
-CMD+=" --autoscaler_cfg /gradstats/resnet50/imagenet/autoscaler_adam_4x.yaml" 
+CMD+=" --autoscaler_cfg /gradstats/resnet50/imagenet/autoscaler_adam_8x.yaml" 
 CMD+=" --epochs $TOTAL_EPOCHS"
 CMD+=" $NHWC"
-CMD+=" --label resnet_1024_adascale"
+CMD+=" --label $label"
 
 # Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node 
 # For EKS we set 8 GPUs per node (pod)

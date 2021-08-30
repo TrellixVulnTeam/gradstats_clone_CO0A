@@ -38,26 +38,33 @@ class AdaScale(Optimizer):
     """
     def __init__(self, optimizer: torch.optim.Optimizer,
                     autoscaler_cfg_path: str,
+                    batch_size,
+                    model = None,
                     scaler = None,
                     summary_writer=None):
+        self._model = model # must be set if grad clipping is done
         self._optimizer = optimizer
         self._summary_writer = summary_writer 
         self._scaler = scaler
+        # this is used to track the batch size changes during dynamic training,
+        # also used for adjusting temperature for gns predictions
+        self._current_batch_size = batch_size
 
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
         self.cfg = AutoScalerConfig(autoscaler_cfg_path)
 
         self._world_size = (self.cfg.world_size if self.cfg.world_size != 0 else 
-                                dist.get_world_size() if dist.is_initialized() else 1)
+                                dist.get_world_size() if dist.is_initialized() else 1) 
         self._rank = dist.get_rank() if dist.is_initialized() else 0
         # TODO: check runtime impact of updating statistics more infrequently
         self._update_interval = self.cfg.update_interval
         self._adjust_grads_for_accumulation = self.cfg.adjust_gradients_for_accumulation
         self._num_grads_to_accum = self.cfg.num_gradients_to_accumulate
+        self._num_grad_samples = self._world_size * self._num_grads_to_accum
         self._smoothing = self.cfg.smoothing
         if self._smoothing is None:
-            self._smoothing = max(1 - self._world_size * self._num_grads_to_accum / 1000, 0)
+            self._smoothing = max(1 - self._num_grad_samples / 1000, 0)
         self._scale = self.cfg.scale
         self._scale_one_batch_size = self.cfg.scale_one_batch_size
         self._max_grad_norm = self.cfg.max_grad_norm
@@ -74,12 +81,15 @@ class AdaScale(Optimizer):
     def _setup(self) -> None:
         self._gain = 1.0
         self._gns = 0.0
+        self._temperature_ratio = None
+        self._temperature = 1.0
         self._effective_lr = 0.0
         self._real_iterations = 0
         self._local_grad_sqr: Optional[torch.Tensor] = None
+        # NOTE: If using nccl then this has to be a cuda tensor
+        self._gain_invalid = torch.ones(1, dtype=torch.uint8, requires_grad=False).cuda()
         self._num_backward_calls = 0
         self._last_final_backward_call = 0        
-        self._gain_invalid = True
         self._num_param_groups = len(self._optimizer.param_groups)
         # Populate state dictionary with AdaScale stats
         # We are going to track the following
@@ -108,10 +118,11 @@ class AdaScale(Optimizer):
         self.state = self._optimizer.state
         self.local_grad_sqr = None
         # this tracks the sum of adascale steps taken so far and is used to estimate
-        # speed-ups obtained by scaling
+        # speed-ups obtained by scaling. Note all these variables will be checkpointed
+        # and restored on dynamic scaling
         self._scale_invariant_steps = 0.0
         # stability related constants for ADAM with AdaScale
-        self._SAFE_UPDATE_RATIO = 1.0
+        self._SAFE_UPDATE_RATIO = 10.0
         self._MIN_STEPS = 50
 
     def _hook(self) -> None:
@@ -147,6 +158,10 @@ class AdaScale(Optimizer):
         for h in self._hook_handles:
             h.remove()
         self._hook_handles = []
+
+    @property
+    def temperature(self) -> float:
+        return self._temperature
 
     @property
     def _state(self) -> Dict[str, np.ndarray]:
@@ -210,6 +225,9 @@ class AdaScale(Optimizer):
             self._state["grad_var_avg"] *= self._scale / scale
         self._scale = scale
 
+    def set_current_batch_size(self, bs: int) -> None:
+        self._current_batch_size = bs
+
     def _grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
         """
         Current estimate of the squared l2-norm of the true gradient
@@ -261,7 +279,7 @@ class AdaScale(Optimizer):
             (float):
                 Estimate of gain ratio.
         """
-        if self._gain_invalid:
+        if self._gain_invalid[0] != 0:
             return 1.0
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
@@ -289,7 +307,7 @@ class AdaScale(Optimizer):
         # for tensorboard
         self._var = var
         self._sqr = sqr
-        if self._gain_invalid:
+        if self._gain_invalid[0] != 0:
             # in case there is no gain - we backoff to base case
             self._gain = 1.0
             return 1.0
@@ -309,16 +327,18 @@ class AdaScale(Optimizer):
 
         We can estimate b_simple = grad_var * batch_size / grad_sqr
         NOTE: that batch size used here is batch size that corresponds to scale 1.0
+        Temperature of training is measuring ratio of current lr and current batch size - this is
+        expected to be constant during the measurement, e.g. if we decay lr by a factor of 10 while
+        keeping batch size constant then we adjust predicted GNS to decay by factor of 10.
         """
-        print(self._real_iterations, self._scale_invariant_steps)
         # TODO: compare numbers with original estimator in the paper
         if self._real_iterations < self._MIN_STEPS:
             # allow averages to stabilize before predicting
             return self._scale_one_batch_size
-        if self._gain_invalid:
-            # fall back to base scale case
-            self._gns = self._scale_one_batch_size
-            return self._scale_one_batch_size
+        if self._gain_invalid[0] != 0:
+            # fall back to moving average
+            self._gns = self._state["gns_avg"]
+            return self._gns
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)
         if self._enable_debug:
@@ -326,8 +346,9 @@ class AdaScale(Optimizer):
         gns = self._scale_one_batch_size * var / sqr
         # clip GNS for upper limit
         gns = min(gns, self._batch_size_upper_limit)
-        self._gns = gns
-        return gns
+        self._gns = gns * self.temperature
+        self._update_avg("gns_avg", np.array([self._gns]), 0.9)
+        return self._state["gns_avg"]
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
             # This function computes and stores the moving average of a vector
@@ -346,8 +367,12 @@ class AdaScale(Optimizer):
     def _get_norm_squared(self, pg_idx, param, grad):
         # unscale grads before computing squares - else numbers blow up with scale
         curr_loss_scale_squared = self._current_loss_scale()**2
-        preconditioner = self._calculate_preconditioner(pg_idx, param)
-        divisor = preconditioner * curr_loss_scale_squared
+        disable_preconditioner = False
+        if disable_preconditioner:
+            divisor = curr_loss_scale_squared
+        else:
+            preconditioner = self._calculate_preconditioner(pg_idx, param)
+            divisor = preconditioner * curr_loss_scale_squared
         norm = torch.nan_to_num(torch.linalg.norm(grad.div(divisor)))
         return norm ** 2
 
@@ -364,7 +389,7 @@ class AdaScale(Optimizer):
                 total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
         # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
         # but just the piece that computes stats
-        total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
+        # total_grad_sqr = torch.clamp(total_grad_sqr, min=0.0, max=1e11)
         return total_grad_sqr
 
 
@@ -425,7 +450,7 @@ class AdaScale(Optimizer):
         work = None
         # EXPERIMENTAL CLAMP squared values to avoid blow-up - note we do not modify grads
         # but just the piece that computes stats
-        self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
+        # self._local_grad_sqr = torch.clamp(self._local_grad_sqr, min=0.0, max=1e11)
         # we store the squared norm at local level before allreduce
         np_local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
  
@@ -438,15 +463,12 @@ class AdaScale(Optimizer):
             print("rank={}, latest={}, previous={}".format(self._rank, np_local_grad_sqr, self.local_grad_sqr))
 
         if  self._real_iterations > self._MIN_STEPS and self.local_grad_sqr[0] > 0.0 and \
-                np.abs(np.log10(np_local_grad_sqr[0]/self.local_grad_sqr[0])) > self._SAFE_UPDATE_RATIO:
+                (np_local_grad_sqr[0]/self.local_grad_sqr[0]) > self._SAFE_UPDATE_RATIO:
             found_outlier = True
-            # use previous value
-            for i, v in enumerate(self.local_grad_sqr):
-                self._local_grad_sqr[i] = self.local_grad_sqr[i]
             if self._enable_debug:
-                print("OUTLIER detected ratio={}, reusing previous value".format(np.abs(np.log(np_local_grad_sqr[0]/self.local_grad_sqr[0]))))
-        else:
-            self.local_grad_sqr = np_local_grad_sqr
+                print("OUTLIER detected ratio={}, skipping optimizer state update".format(np_local_grad_sqr[0]/self.local_grad_sqr[0]))
+
+        self.local_grad_sqr = np_local_grad_sqr
 
         if self._world_size > 1:
             work = dist.all_reduce(self._local_grad_sqr, async_op=True)
@@ -490,7 +512,7 @@ class AdaScale(Optimizer):
         # gradients sample size is `accum_steps`*`num_workers`
         # `total_grad_sqr` is squared l2-norm of allreduced gradient
 
-        cN = self._world_size * self._num_grads_to_accum
+        cN = self._num_grad_samples
         # when S = cN the formulation reduces to that in paper
         if S > 1:
             grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
@@ -509,15 +531,28 @@ class AdaScale(Optimizer):
         self._nonsmooth_var = grad_var
         self._nonsmooth_sqr = grad_sqr
 
-        self._gain_invalid = False
-        if np.any( grad_var <= 0.) or np.any( grad_sqr <= 0.) or np.isnan(np.sum(grad_sqr)) or np.isinf(np.sum(grad_sqr)):
+        self._gain_invalid[0] = 0
+
+        if found_outlier or \
+                np.any( grad_var <= 0.) or \
+                np.any( grad_sqr <= 0.) or \
+                np.isnan(np.sum(grad_sqr)) or \
+                np.isinf(np.sum(grad_sqr)):
             if self._enable_debug and self._rank == 0:
                 print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
                 print(local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale())
-            self._gain_invalid = True
-        else:
+            self._gain_invalid[0] = 1
+
+        # an extra boolean sync here for checking if any of the worker stats blew up and skip update
+        if self._world_size > 1:
+            dist.all_reduce(self._gain_invalid)
+
+        if self._gain_invalid[0] == 0:
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
+        else:
+            if self._enable_debug:
+                print('global: gradient inf/nan skipping update of moving averages of grad moments')
 
         # reset backward call counters for next param update cycle
         self._last_final_backward_call = self._num_backward_calls = 0
@@ -571,9 +606,19 @@ class AdaScale(Optimizer):
             # log effective LR for param group 0
             if pg_idx == 0:
                 self._effective_lr = param_group["lr"]
+                if self._temperature_ratio is None:
+                    self._temperature_ratio = original_lr[0]/self._current_batch_size
+                else:
+                    curr_temperature_ratio = original_lr[0]/self._current_batch_size
+                    self._temperature *= curr_temperature_ratio / self._temperature_ratio
+                    self._temperature_ratio = curr_temperature_ratio
         res = None
         # Step it.
         if self._scaler:
+            if self._max_grad_norm > 0.0:
+                # Google BERT uses grad norm clipping with Adam optimizer
+                self._scaler.unscale_(self._optimizer)
+                norm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=self._max_grad_norm)
             res = self._scaler.step(self._optimizer)
         else:
             self._optimizer.step(*args, **kwargs)
@@ -640,7 +685,7 @@ class AdaScale(Optimizer):
         """
         raise NotImplementedError
 
-    def _calculate_preconditioner(self, pg_idx, param, where="local"):
+    def _calculate_preconditioner(self, pg_idx, param):
         """
         From openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
         components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
@@ -648,6 +693,7 @@ class AdaScale(Optimizer):
         ignore batch size predictions initially
         Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
         TODO: Investigate other preconditioners
+        FIXME: This is call is expensive - optimize this for step time
         """
         if self._real_iterations < self._MIN_STEPS or \
                 not self._is_adaptive or \
@@ -669,12 +715,13 @@ class AdaScale(Optimizer):
     def log_to_tensorboard(self, real_iteration):
         self._summary_writer.add_scalar('Train/Real Iterations', real_iteration, self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/Gain', self._gain, self._scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/var', self._nonsmooth_var[0], self._scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/sqr', self._nonsmooth_sqr[0], self._scale_invariant_steps)
+        # self._summary_writer.add_scalar('Train/var', self._nonsmooth_var[0], self._scale_invariant_steps)
+        # self._summary_writer.add_scalar('Train/sqr', self._nonsmooth_sqr[0], self._scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/temperature', self._temperature, self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/var_smooth', self._var, self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/sqr_smooth', self._sqr, self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/allreduced_grad_sqr', self.total_grad_sqr[0],self._scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/local_grad_sqr', self.local_grad_sqr[0],self._scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/local_grad_sqr', self.local_grad_sqr[0]/self._num_grad_samples,self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/GNS', self._gns, self._scale_invariant_steps)
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, self._scale_invariant_steps)
         self._summary_writer.flush()
