@@ -1,0 +1,21 @@
+autoscaler:
+  enable_debug: On
+  collect_tensorboard: On
+  world_size: 0
+  scale: 8.0
+  update_interval: 1
+  precondition_gradients: Off
+  num_gradients_to_accumulate: 1
+  adjust_gradients_for_accumulation: False
+  smoothing: null
+adascale:
+  enabled: On
+  aggressive_schedule: Off
+  is_adaptive: True
+  use_pt_adam: True
+  max_grad_norm: 5.0
+gradient_noise_scale:
+  enabled: On
+  batch_size_upper_limit: .Inf
+  scale_one_batch_size: 256
+
