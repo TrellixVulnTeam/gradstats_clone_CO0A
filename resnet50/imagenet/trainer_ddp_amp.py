@@ -431,7 +431,9 @@ def main_worker(args):
                     'state_dict': model.state_dict(),
                     'best_acc1': best_acc1,
                     'optimizer': optimizer.state_dict(),
-                }, is_best)
+                },
+                is_best,
+                filename='checkpoint-{}.pth.tar'.format(epoch+1))
     # close summary writer
     writer.close()
 

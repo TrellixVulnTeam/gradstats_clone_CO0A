@@ -334,7 +334,9 @@ class AdaScale(Optimizer):
         # TODO: compare numbers with original estimator in the paper
         if self._real_iterations < self._MIN_STEPS:
             # allow averages to stabilize before predicting
-            return self._scale_one_batch_size
+            self._gns = self._scale_one_batch_size
+            self._update_avg("gns_avg", np.array([self._gns]), 0.9)
+            return self._gns
         if self._gain_invalid[0] != 0:
             # fall back to moving average
             self._gns = self._state["gns_avg"]
@@ -345,8 +347,8 @@ class AdaScale(Optimizer):
             print("IN GNS (sqr, var):", sqr, var)
         gns = self._scale_one_batch_size * var / sqr
         # clip GNS for upper limit
-        gns = min(gns, self._batch_size_upper_limit)
-        self._gns = gns * self.temperature
+        self._gns = min(gns, self._batch_size_upper_limit)
+        # self._gns = gns * self.temperature
         self._update_avg("gns_avg", np.array([self._gns]), 0.9)
         return self._state["gns_avg"]
 
@@ -488,13 +490,6 @@ class AdaScale(Optimizer):
 
         # save as object variable only for Tensorboard logging
         self.total_grad_sqr = total_grad_sqr
-
-        # See appendix B.3 of the paper.
-        # Modified to handle cases where scale != world_size
-        #
-        # local_grad_sqr is \sum_{i=1}^{c N} \norm{g_t_i}^2
-        # where N is world size and c is num_grads_to_accum
-        # total_grad_sqr is \norm{\bar{g}_t}^2
  
         # adjusting stats for original formula
         # the reasoning for this adjustment is as follows: if we adjusted the accumulation factor as 
@@ -514,18 +509,29 @@ class AdaScale(Optimizer):
 
         cN = self._num_grad_samples
         # when S = cN the formulation reduces to that in paper
+        # grad_var  = (1/B_small - 1/B_large)(sum(local_grad_sqr)/cN - total_grad_sqr)
+        # For cases where small scale (S=1) itself is DDP or accumulated gradients on single GPU
+        # We have B_small = B_scale1 * S/CN where B_scale1 is total batch size for S=1
+        # Thus deriving further we get grad_var = B_small * (S/(cN-1))(sum(local_grad_sqr)/cN - total_grad_sqr)
+        # note that we do not use this value directly, we take expectation over iterations
+        # Also we adjust for B_small in gns calculation - the value tracked is along lines of
+        # AdaScale gain calculation
+                
         if S > 1:
             grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
+            # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
             grad_sqr = total_grad_sqr - grad_var / S
         else:
+            # THIS MAY NOT BE CORRECT - TODO: derive else raise NotSupportedException for S=1
             grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
             grad_sqr = total_grad_sqr - grad_var / cN
 
-        # Bounding these values artificially is not good - affects moving averages which in turn lingers on depending on smoothing
+        # Bounding these values artificially is not good
+        # affects moving averages which in turn lingers on depending on smoothing
+        # also good bounding value for variance is problem dependent, so we skip
+        # updating averages when variance value is not stable
         #grad_var = np.maximum(grad_var, 1e-6)
-        #grad_sqr = np.maximum(grad_sqr, 0.0)
-        if self._enable_debug and self._rank == 0:
-            print('sqr:', grad_sqr, 'var:', grad_var)
+        grad_sqr = np.maximum(grad_sqr, 0.0)
 
         # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
         self._nonsmooth_var = grad_var
@@ -535,12 +541,12 @@ class AdaScale(Optimizer):
 
         if found_outlier or \
                 np.any( grad_var <= 0.) or \
-                np.any( grad_sqr <= 0.) or \
+                np.any( grad_sqr < 0.) or \
                 np.isnan(np.sum(grad_sqr)) or \
                 np.isinf(np.sum(grad_sqr)):
-            if self._enable_debug and self._rank == 0:
+            if self._enable_debug:
                 print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
-                print(local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale())
+                print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
             self._gain_invalid[0] = 1
 
         # an extra boolean sync here for checking if any of the worker stats blew up and skip update
@@ -550,9 +556,6 @@ class AdaScale(Optimizer):
         if self._gain_invalid[0] == 0:
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
-        else:
-            if self._enable_debug:
-                print('global: gradient inf/nan skipping update of moving averages of grad moments')
 
         # reset backward call counters for next param update cycle
         self._last_final_backward_call = self._num_backward_calls = 0
