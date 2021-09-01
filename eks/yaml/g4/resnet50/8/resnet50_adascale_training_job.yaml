@@ -17,7 +17,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_gradclip"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_gradclip autoscaler_adam_8x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4
@@ -49,7 +49,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_gradclip"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_gradclip autoscaler_adam_8x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4

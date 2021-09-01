@@ -11,18 +11,20 @@ export OMP_NUM_THREADS=48
 
 train_batch_size=${1:-32}
 label=${2:-"resnet_dev_adascale"}
-learning_rate=${3:-"0.001"}
-enable_amp=${4:-"--amp"}
-num_gpus=${5:-4}
-resume_training=${6:-"false"}
-NHWC=${7:-"--channels-last"}
-ARCH=${8:-"resnet50"}
-NUM_WORKERS=${9:-12}
-TOTAL_EPOCHS=${10:-90}
+autoscaler_cfg=${3:-"autoscaler.yaml"}
+learning_rate=${4:-"0.001"}
+enable_amp=${5:-"--amp"}
+num_gpus=${6:-4}
+resume_training=${7:-"false"}
+NHWC=${8:-"--channels-last"}
+ARCH=${9:-"resnet50"}
+NUM_WORKERS=${10:-12}
+TOTAL_EPOCHS=${11:-90}
 create_logfile="true"
 DATA_DIR="/shared/benchmarking_datasets/imagenet/processed"
 CODEDIR="/gradstats/resnet50/imagenet"
-RESULTS_DIR="/shared/export/resnet_adam_4x"
+RESULTS_DIR="/shared/export/${label}"
+AUTOSCALER_CFG="${CODEDIR}/${autoscaler_cfg}"
 if [ ! -d "$DATA_DIR" ] ; then
    echo "Warning! $DATA_DIR directory missing. Training cannot start"
 fi
@@ -40,7 +42,7 @@ CMD+=" $enable_amp"
 CMD+=" --optimizer AdamW"
 CMD+=" --lr $learning_rate"
 CMD+=" --weight-decay 0.1"
-CMD+=" --autoscaler_cfg /gradstats/resnet50/imagenet/autoscaler_adam_8x.yaml" 
+CMD+=" --autoscaler_cfg $AUTOSCALER_CFG"
 CMD+=" --epochs $TOTAL_EPOCHS"
 CMD+=" $NHWC"
 CMD+=" --label $label"

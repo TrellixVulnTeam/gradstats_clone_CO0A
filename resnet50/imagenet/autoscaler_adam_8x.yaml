@@ -11,6 +11,7 @@ autoscaler:
 adascale:
   enabled: On
   aggressive_schedule: Off
+  is_adaptive: True
   use_pt_adam: True
   max_grad_norm: 5.0
 gradient_noise_scale:

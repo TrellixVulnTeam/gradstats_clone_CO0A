@@ -2,7 +2,7 @@ import os
 import os.path as osp
 import yaml
 
-#TODO: move to dataclass since there is no logic here
+#TODO: move to dataclass since there is no logic here. Add sane defaults.
 
 class AutoScalerConfig:
     """
@@ -31,6 +31,7 @@ class AutoScalerConfig:
         self.enable_adascale = adascale_config['enabled']
         self.aggressive_schedule = adascale_config['aggressive_schedule']
         self.max_grad_norm = adascale_config['max_grad_norm']
+        self.is_adaptive = adascale_config['is_adaptive']
         self.use_pt_adam = adascale_config['use_pt_adam']
         self.enable_gns = gns_config['enabled']
         self.batch_size_upper_limit = gns_config['batch_size_upper_limit']
