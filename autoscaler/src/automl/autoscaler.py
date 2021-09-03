@@ -738,4 +738,4 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/sqr', self._sqr, real_iteration)
         self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
-        self._summary_writer.flush()
+        # self._summary_writer.flush()

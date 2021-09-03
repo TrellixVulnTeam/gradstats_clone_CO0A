@@ -216,6 +216,7 @@ def parse_arguments():
                         default="resnet50_dev_delme",
                         help='label used to create log directory')
 
+    # tensorboard files are pushed to S3 on validation (ideally infrequently)
     parser.add_argument('--bucket',
                         type=str,
                         default='mzanur-autoscaler',
@@ -523,7 +524,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
 
     # switch to train mode
     model.train()
-    end = time.time()
+    end = time.perf_counter()
 
     prefetcher = data_prefetcher(train_loader)
     images, target = prefetcher.next()
@@ -537,7 +538,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
             break
 
         # measure data loading time
-        data_time.update(time.time() - end)
+        data_time.update(time.perf_counter() - end)
 
         # compute output
         with torch.cuda.amp.autocast(enabled=args.amp):
@@ -571,29 +572,31 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         #torch.cuda.synchronize()
 
         # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+        batch_time.update(time.perf_counter() - end)
+        end = time.perf_counter()
 
-        if global_step % args.print_freq == 0 and get_rank() == 0:
-            progress.display(i)
-            gain = optimizer.gain()
-            effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
-            print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
+        if get_rank() == 0:
             # tensorboard summaries are logged based on scale invariant iterations
             # so that we can compare runs (loss values at the same logical stage)
+            # NOTE if writing to S3 directly then make sure that write rate is limited else
+            # S3 writes will fail and you will lose TB logs
             tensorboard_step = scale_one_steps_per_epoch * epoch + i
+            optimizer.log_to_tensorboard(global_step)
+            tensorboard_write_time = time.perf_counter() - end
+            print(f"Took {tensorboard_write_time} seconds to log to TB")
+        if global_step % args.print_freq == 0 and get_rank() == 0:
+            progress.display(i)
             writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
             writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
             writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
             writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
             writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
-            optimizer.log_to_tensorboard(global_step)
+            gain = optimizer.gain()
+            effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
+            print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
             # flush and push to S3 every 500 iterations FIXME: hardcoded
             if global_step % 500 == 0:
                 writer.flush()
-                # update the tensorboard log in s3 bucket
-                upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
-                           f'{args.arch}/{args.label}')
         images, target = prefetcher.next()
 
 
@@ -607,7 +610,7 @@ def validate(val_loader, model, criterion, writer, epoch, args):
 
     # switch to evaluate mode
     model.eval()
-    end = time.time()
+    end = time.perf_counter()
 
     prefetcher = data_prefetcher(val_loader)
     images, target = prefetcher.next()
@@ -626,8 +629,8 @@ def validate(val_loader, model, criterion, writer, epoch, args):
         top5.update(acc5[0], images.size(0))
 
         # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+        batch_time.update(time.perf_counter() - end)
+        end = time.perf_counter()
 
         if i % args.print_freq == 0:
             progress.display(i)

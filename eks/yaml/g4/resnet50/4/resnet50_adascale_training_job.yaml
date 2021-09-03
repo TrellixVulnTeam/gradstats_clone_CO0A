@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "resnet50-autoscaler-job"
+  name: "resnet50-4x-autoscaler-job"
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -17,7 +17,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024 resnet_1024_adascale_tb autoscaler_adam_4x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4
@@ -49,7 +49,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 1024 resnet_1024_adascale_tb autoscaler_adam_4x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4

@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "resnet50-8x-autoscaler-job"
+  name: "resnet50-2x-autoscaler-job"
 spec:
   pytorchReplicaSpecs:
     Master:
@@ -17,7 +17,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_tb autoscaler_adam_8x.yaml"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 512 resnet_512_adascale_tb autoscaler_adam_2x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4
@@ -37,7 +37,7 @@ spec:
             emptyDir:
               medium: Memory
     Worker:
-      replicas: 7
+      replicas: 1
       restartPolicy: Never
       template:
         spec:
@@ -49,7 +49,7 @@ spec:
               - "/bin/sh"
               - "-c"
             args:
-            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_tb autoscaler_adam_8x.yaml"
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 512 resnet_512_adascale_tb autoscaler_adam_2x.yaml"
             resources:
               limits:
                 nvidia.com/gpu: 4
@@ -68,4 +68,3 @@ spec:
           - name: dshm
             emptyDir:
               medium: Memory
-

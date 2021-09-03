@@ -2,7 +2,7 @@ autoscaler:
   enable_debug: Off
   collect_tensorboard: On
   world_size: 0
-  scale: 8.0
+  scale: 2.0
   update_interval: 1
   precondition_gradients: On
   num_gradients_to_accumulate: 1
@@ -13,7 +13,7 @@ adascale:
   aggressive_schedule: Off
   is_adaptive: True
   use_pt_adam: True
-  max_grad_norm: 5.0
+  max_grad_norm: 0.0
 gradient_noise_scale:
   enabled: On
   batch_size_upper_limit: .Inf

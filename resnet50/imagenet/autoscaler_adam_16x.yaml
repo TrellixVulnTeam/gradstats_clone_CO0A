@@ -2,7 +2,7 @@ autoscaler:
   enable_debug: Off
   collect_tensorboard: On
   world_size: 0
-  scale: 8.0
+  scale: 16.0
   update_interval: 1
   precondition_gradients: On
   num_gradients_to_accumulate: 1
