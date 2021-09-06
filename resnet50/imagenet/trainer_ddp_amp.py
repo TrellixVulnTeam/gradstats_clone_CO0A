@@ -166,6 +166,12 @@ def parse_arguments():
                         action='store_true',
                         help='evaluate model on validation set')
 
+    parser.add_argument('--run-gns-experiment',
+                        dest='run_gns_experiment',
+                        action='store_true',
+                        help='when enabled we replace step decay with linear decay to enable different batch size runs')
+
+
     parser.add_argument('--pretrained',
                         dest='pretrained',
                         action='store_true',
@@ -412,7 +418,8 @@ def main_worker(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
+        if not args.run_gns_experiment:
+            adjust_learning_rate(optimizer, epoch, args)
         # train for one epoch
         train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
               args)
@@ -497,6 +504,7 @@ class data_prefetcher():
 
 
 global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
+
 def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
           args):
     global global_step
@@ -530,6 +538,8 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
     images, target = prefetcher.next()
     i = 0
     scheduler_progress = 0
+    total_steps = 90 * scale_one_steps_per_epoch
+
     while images is not None:
         global_step += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
@@ -552,7 +562,6 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
-
         scaler.scale(loss).backward()
 
         if args.enable_autoscaler:
@@ -575,15 +584,18 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         batch_time.update(time.perf_counter() - end)
         end = time.perf_counter()
 
+        # tensorboard summaries are logged based on scale invariant iterations
+        # so that we can compare runs (loss values at the same logical stage)
+        # NOTE if writing to S3 directly then make sure that write rate is limited else
+        # S3 writes will fail and you will lose TB logs
+        tensorboard_step = scale_one_steps_per_epoch * epoch + i
+        if args.run_gns_experiment:
+            # if running GNS experiments then adjust LR every step - instead of step decay
+            linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
+
         if get_rank() == 0:
-            # tensorboard summaries are logged based on scale invariant iterations
-            # so that we can compare runs (loss values at the same logical stage)
-            # NOTE if writing to S3 directly then make sure that write rate is limited else
-            # S3 writes will fail and you will lose TB logs
-            tensorboard_step = scale_one_steps_per_epoch * epoch + i
             optimizer.log_to_tensorboard(global_step)
             tensorboard_write_time = time.perf_counter() - end
-            print(f"Took {tensorboard_write_time} seconds to log to TB")
         if global_step % args.print_freq == 0 and get_rank() == 0:
             progress.display(i)
             writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
@@ -598,7 +610,6 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
             if global_step % 500 == 0:
                 writer.flush()
         images, target = prefetcher.next()
-
 
 def validate(val_loader, model, criterion, writer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -701,6 +712,15 @@ class ProgressMeter(object):
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     lr = args.lr * (0.1**(epoch // 30))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
+def linear_decay_learning_rate(optimizer, step, total_steps, args):
+    """ linear decay for GNS comparisons """
+    base_lr = args.lr
+    progress = step / total_steps
+    lr = base_lr * (1.0 - progress)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
