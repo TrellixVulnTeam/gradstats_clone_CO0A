@@ -101,6 +101,12 @@ def parse_arguments():
                             'batch size of all GPUs when '
                             'using Data Parallel or Distributed Data Parallel')
 
+    parser.add_argument('--gradient-accumulation-steps',
+                        default=1,
+                        type=int,
+                        dest='gradient_accumulation_steps',
+                        help='set to > 1 for larger batch sizes')
+
     parser.add_argument('--lr',
                         '--learning-rate',
                         default=0.1,
@@ -268,7 +274,6 @@ def setup_training(args):
 
 def main():
     args = parse_arguments()
-
     args = setup_training(args)
     main_worker(args)
 
@@ -390,7 +395,7 @@ def main_worker(args):
         train_sampler = None
         val_sampler = None
     # adjust batch size per worker
-    args.batch_size = args.batch_size // get_world_size()
+    args.batch_size = args.batch_size // (get_world_size() * args.gradient_accumulation_steps)
 
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=args.batch_size,
@@ -402,7 +407,7 @@ def main_worker(args):
                                                collate_fn=collate_fn)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
-                                             batch_size=args.batch_size,
+                                             batch_size=64, #HARDCODED TO IMAGES PER GPU FIXME args.batch_size,
                                              shuffle=False,
                                              num_workers=args.workers,
                                              pin_memory=False,
@@ -503,10 +508,9 @@ class data_prefetcher():
         return input, target
 
 
-global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
+global_step = 0 
 
-def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
-          args):
+def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args):
     global global_step
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -519,12 +523,10 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         lr_scale = optimizer.scale
 
     # multiply by world size to account for division earlier
-    scale_one_bs = int(
-        args.batch_size * get_world_size() // lr_scale
-    )
+    world_size = get_world_size() * args.gradient_accumulation_steps
+    scale_one_bs = int(args.batch_size * world_size // lr_scale)
 
-    scale_one_steps_per_epoch = int(
-        len(train_loader) * args.batch_size // scale_one_bs)
+    scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_bs)
 
     progress = ProgressMeter(scale_one_steps_per_epoch,
                              [batch_time, data_time, losses, top1, top5],
@@ -539,9 +541,12 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
     i = 0
     scheduler_progress = 0
     total_steps = 90 * scale_one_steps_per_epoch
-
+    accumulate_gradients = args.gradient_accumulation_steps > 1
+    args.print_freq = args.print_freq * args.gradient_accumulation_steps
+    curr_epoch_step = 0 # only to track grad accumulation related stuff
     while images is not None:
         global_step += 1
+        curr_epoch_step += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
         if i >= scale_one_steps_per_epoch:
@@ -550,65 +555,76 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
         # measure data loading time
         data_time.update(time.perf_counter() - end)
 
+        is_last_accumulation_step = curr_epoch_step % args.gradient_accumulation_steps == 0
         # compute output
         with torch.cuda.amp.autocast(enabled=args.amp):
-            output = model(images)
-            loss = criterion(
-                output, target
-            )  #FIXME: this is per worker loss and for logging we may want to do average loss over world
+            if not is_last_accumulation_step:
+                with model.no_sync():
+                    output = model(images)
+                    #FIXME: this is per worker loss and for logging we may want to do average loss over world
+                    loss = criterion(output, target)
+            else:
+                output = model(images)
+                loss = criterion(output, target)
 
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
-        scaler.scale(loss).backward()
+                # measure accuracy and record loss (on last batch of accumulation)
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                average_factor = images.size(0) # * args.gradient_accumulation_steps
+                losses.update(loss.item(), average_factor)
+                top1.update(acc1[0], average_factor)
+                top5.update(acc5[0], average_factor)
 
-        if args.enable_autoscaler:
-            scheduler_progress = optimizer.get_step_increment()
-            i += scheduler_progress
-            optimizer.step()
+        if accumulate_gradients and not is_last_accumulation_step:
+            with model.no_sync():
+                scaler.scale(loss).backward()
         else:
-            i = global_step % (scale_one_steps_per_epoch+1)
-            scheduler_progress = 1
-            scaler.step(optimizer)
+            scaler.scale(loss).backward()
+            # at the last accum step, take one optim step
+            if args.enable_autoscaler:
+                scheduler_progress = optimizer.get_step_increment()
+                i += scheduler_progress
+                optimizer.step()
+            else:
+                i = global_step % (scale_one_steps_per_epoch+1)
+                scheduler_progress = 1
+                scaler.step(optimizer)
+            # update scaler state machine
+            scaler.update()
+            # optimizer.zero_grad()
+            for param in model.parameters():
+                param.grad = None
 
-        scaler.update()
-        # optimizer.zero_grad()
-        for param in model.parameters():
-            param.grad = None
+            #torch.cuda.synchronize()
 
-        #torch.cuda.synchronize()
+            # measure elapsed time
+            batch_time.update(time.perf_counter() - end)
+            end = time.perf_counter()
 
-        # measure elapsed time
-        batch_time.update(time.perf_counter() - end)
-        end = time.perf_counter()
+            # tensorboard summaries are logged based on scale invariant iterations
+            # so that we can compare runs (loss values at the same logical stage)
+            # NOTE if writing to S3 directly then make sure that write rate is limited else
+            # S3 writes will fail and you will lose TB logs
+            tensorboard_step = scale_one_steps_per_epoch * epoch + i
+            if args.run_gns_experiment:
+                # if running GNS experiments then adjust LR every step - instead of step decay
+                linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
 
-        # tensorboard summaries are logged based on scale invariant iterations
-        # so that we can compare runs (loss values at the same logical stage)
-        # NOTE if writing to S3 directly then make sure that write rate is limited else
-        # S3 writes will fail and you will lose TB logs
-        tensorboard_step = scale_one_steps_per_epoch * epoch + i
-        if args.run_gns_experiment:
-            # if running GNS experiments then adjust LR every step - instead of step decay
-            linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
-
-        if get_rank() == 0:
-            optimizer.log_to_tensorboard(global_step)
-            tensorboard_write_time = time.perf_counter() - end
-        if global_step % args.print_freq == 0 and get_rank() == 0:
-            progress.display(i)
-            writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
-            writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
-            writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
-            writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
-            writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
-            gain = optimizer.gain()
-            effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
-            print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
-            # flush and push to S3 every 500 iterations FIXME: hardcoded
-            if global_step % 500 == 0:
-                writer.flush()
+            if get_rank() == 0:
+                optimizer.log_to_tensorboard(global_step // args.gradient_accumulation_steps)
+                tensorboard_write_time = time.perf_counter() - end
+            if global_step % args.print_freq == 0 and get_rank() == 0:
+                progress.display(i)
+                writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
+                writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
+                writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
+                writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
+                writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
+                gain = optimizer.gain()
+                effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
+                print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
+                # flush and push to S3 every 500 iterations FIXME: hardcoded
+                if global_step % 500 == 0:
+                    writer.flush()
         images, target = prefetcher.next()
 
 def validate(val_loader, model, criterion, writer, epoch, args):
@@ -744,4 +760,3 @@ def accuracy(output, target, topk=(1, )):
 
 if __name__ == '__main__':
     main()
-
