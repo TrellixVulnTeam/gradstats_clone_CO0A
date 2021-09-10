@@ -420,6 +420,10 @@ def main_worker(args):
         writer.close()
         return
 
+    # if we are using gradient accumulation then global_step will increment accum times per optimizer update
+    args.print_freq = args.print_freq * args.gradient_accumulation_steps
+
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -542,7 +546,6 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     scheduler_progress = 0
     total_steps = 90 * scale_one_steps_per_epoch
     accumulate_gradients = args.gradient_accumulation_steps > 1
-    args.print_freq = args.print_freq * args.gradient_accumulation_steps
     curr_epoch_step = 0 # only to track grad accumulation related stuff
     while images is not None:
         global_step += 1
@@ -612,7 +615,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
             if get_rank() == 0:
                 optimizer.log_to_tensorboard(global_step // args.gradient_accumulation_steps)
                 tensorboard_write_time = time.perf_counter() - end
-            if global_step % args.print_freq == 0 and get_rank() == 0:
+            if curr_epoch_step % args.print_freq == 0 and get_rank() == 0:
                 progress.display(i)
                 writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
                 writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
