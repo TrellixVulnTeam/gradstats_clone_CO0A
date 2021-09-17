@@ -1,0 +1,44 @@
+# base container with EFA support - needs to be tested
+# FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.9.0-gpu-py38-cu111-ubuntu20.04
+# all the dependencies
+ADD gradstats $HOME/gradstats
+
+# RUN pip uninstall -y torch
+# TODO remove and make the BASE_IMAGE pytorch:1.9.0-cuda11.1-cudnn8-runtime when torch-1.9 releases
+# RUN pip install torch==1.9.0+cu111 torchvision==0.10.0+cu111 torchaudio==0.9.0 -f https://download.pytorch.org/whl/torch_stable.html
+# RUN pip install --pre torch -f https://download.pytorch.org/whl/nightly/cu111/torch_nightly.html
+
+# generic deps
+RUN pip install tqdm tensorboard yacs
+
+# mask rcnn deps
+
+# env for custom kernels
+ENV TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0"
+ARG FORCE_CUDA="1"
+ENV FORCE_CUDA=${FORCE_CUDA}
+
+# adascale deps
+WORKDIR $HOME/gradstats/autoscaler
+RUN pip install -e .
+
+# bert deps
+RUN pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger
+
+# resnet deps
+# NONE SO FAR
+
+# Install vim for in-container edits
+RUN apt-get install -q -y vim
+
+WORKDIR /
+
+RUN pip install python-etcd
+ENV ALLOW_NONE_AUTHENTICATION yes
+
+USER root
+ENTRYPOINT ["python", "-m", "torch.distributed.run"]
+# ENTRYPOINT ["torchrun"]
+CMD ["--help"]
+

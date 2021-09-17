@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fsx-elastic-claim
+  namespace: elastic-job
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: fsx-sc
+  resources:
+    requests:
+      storage: 7200Gi
