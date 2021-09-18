@@ -38,7 +38,7 @@ class AdaScale(Optimizer):
     """
     def __init__(self, optimizer: torch.optim.Optimizer,
                     autoscaler_cfg_path: str,
-                    batch_size,
+                    # batch_size,
                     model = None,
                     scaler = None,
                     summary_writer=None):
@@ -46,14 +46,9 @@ class AdaScale(Optimizer):
         self._optimizer = optimizer
         self._summary_writer = summary_writer 
         self._scaler = scaler
-        # this is used to track the batch size changes during dynamic training,
-        # also used for adjusting temperature for gns predictions
-        self._current_batch_size = batch_size
-
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
         self.param_groups = self._optimizer.param_groups
         self.cfg = AutoScalerConfig(autoscaler_cfg_path)
-
         self._world_size = (self.cfg.world_size if self.cfg.world_size != 0 else 
                                 dist.get_world_size() if dist.is_initialized() else 1) 
         self._rank = dist.get_rank() if dist.is_initialized() else 0
@@ -65,10 +60,19 @@ class AdaScale(Optimizer):
         self._smoothing = self.cfg.smoothing
         if self._smoothing is None:
             self._smoothing = max(1 - self._num_grad_samples / 1000, 0)
-        self._scale = self.cfg.scale
         self._scale_one_batch_size = self.cfg.scale_one_batch_size
+        self._scale_one_world_size = self.cfg.scale_one_world_size
+        # compute scale factor (currently integer)
+        self._scale = int(self._num_grad_samples // self._scale_one_world_size)
+        # this is used to track the batch size changes during dynamic training,
+        # also used for adjusting temperature for gns predictions
+        self._current_batch_size = self._scale_one_batch_size * self._num_grad_samples
+        #TODO: customize configuration based on scale if file present
+
         self._max_grad_norm = self.cfg.max_grad_norm
         self._batch_size_upper_limit = self.cfg.batch_size_upper_limit
+        assert self._current_batch_size <= self._batch_size_upper_limit
+
         self._enable_debug = self.cfg.enable_debug
         self._is_adaptive = self.cfg.is_adaptive
         self._precondition_gradients = self.cfg.precondition_gradients
@@ -370,6 +374,7 @@ class AdaScale(Optimizer):
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
 
     def _get_norm_squared(self, pg_idx, param, grad):
+        grad = grad.detach()
         # unscale grads before computing squares - else numbers blow up with scale
         curr_loss_scale_squared = self._current_loss_scale()**2
         if not self._precondition_gradients:
@@ -400,6 +405,7 @@ class AdaScale(Optimizer):
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
+        grad = grad.detach()
         grads_are_invalid = False
         if torch.sum(torch.isnan(grad)) or torch.sum(torch.isinf(grad)):
             grads_are_invalid = True

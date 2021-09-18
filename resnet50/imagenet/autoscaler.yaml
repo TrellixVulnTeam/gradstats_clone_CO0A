@@ -18,3 +18,4 @@ gradient_noise_scale:
   enabled: Off
   batch_size_upper_limit: .Inf
   scale_one_batch_size: 256
+  scale_one_world_size: 4

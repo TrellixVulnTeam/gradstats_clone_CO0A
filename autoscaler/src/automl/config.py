@@ -21,7 +21,6 @@ class AutoScalerConfig:
         self.enable_debug = autoscaler_config['enable_debug']
         self.collect_tensorboard = autoscaler_config['collect_tensorboard']
         self.world_size =  autoscaler_config['world_size']
-        self.scale = autoscaler_config['scale']
         self.update_interval = autoscaler_config['update_interval']
         self.precondition_gradients = autoscaler_config['precondition_gradients']
         self.smoothing =  autoscaler_config['smoothing']
@@ -36,6 +35,8 @@ class AutoScalerConfig:
         self.enable_gns = gns_config['enabled']
         self.batch_size_upper_limit = gns_config['batch_size_upper_limit']
         self.scale_one_batch_size = gns_config['scale_one_batch_size']
+        self.scale_one_world_size = gns_config['scale_one_world_size']
+
 
 if __name__ == "__main__":
     print(os.getcwd())

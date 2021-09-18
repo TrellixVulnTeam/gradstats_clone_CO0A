@@ -1,17 +1,17 @@
 apiVersion: elastic.pytorch.org/v1alpha1
 kind: ElasticJob
 metadata:
-  name: "resnet50-elastic-autoscaler-job-16"
+  name: "resnet50-elastic-autoscaler-job-1"
   namespace: elastic-job
 spec:
   # Use "etcd-service:2379" if you already apply etcd.yaml
   # Update for scaling via template - autoscaler cfg needs to move dynamic parts out
-  rdzvEndpoint: "10.100.46.116:2379"
+  rdzvEndpoint: "10.100.71.83:2379"
   minReplicas: 1
   maxReplicas: 8
   replicaSpecs:
     Worker:
-      replicas: 2
+      replicas: 1
       restartPolicy: ExitCode
       template:
         apiVersion: v1
@@ -44,7 +44,7 @@ spec:
                 - "--optimizer=AdamW"
                 - "--lr=0.001"
                 - "--weight-decay=0.1"
-                - "--autoscaler_cfg=/gradstats/resnet50/imagenet/autoscaler_adam_2x.yaml"
+                - "--enable-autoscaler"
                 - "--epochs=90"
                 - "--channels-last"
                 - "--label=r50_elastic_delme"

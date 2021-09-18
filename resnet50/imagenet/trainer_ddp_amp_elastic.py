@@ -31,6 +31,7 @@ model_names = sorted(name for name in models.__dict__
                      and callable(models.__dict__[name]))
 
 
+#TODO: Refactor this class - generalize for all models
 class State:
     """
     Container for objects that we want to checkpoint. Represents the
@@ -79,12 +80,8 @@ class State:
 
     def load(self, f, device_id):
         # Map model to be loaded to specified single gpu.
-#       checkpoint = torch.load(args.resume, map_location="cpu")
         snapshot = torch.load(f, map_location=f"cuda:{device_id}")
         self.apply_snapshot(snapshot, device_id)
-
-
-# best_acc1 = 0
 
 
 def get_rank():
@@ -113,6 +110,7 @@ def parse_arguments():
                         choices=model_names,
                         help='model architecture: ' + ' | '.join(model_names) +
                         ' (default: resnet18)')
+
     parser.add_argument('--amp',
                         default=False,
                         action='store_true',
@@ -123,10 +121,10 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-    parser.add_argument('--autoscaler_cfg',
-                        default=None,
-                        type=str,
-                        help='AutoScaler configuration path')
+#    parser.add_argument('--autoscaler-cfg-path-template',
+#                        default="/gradstats/resnet50/imagenet/autoscaler_adam_{}x.yaml",
+#                        type=str,
+#                        help='AutoScaler configuration template')
 
     parser.add_argument('-j',
                         '--workers',
@@ -226,10 +224,12 @@ def parse_arguments():
                         help='evaluate model on validation set')
 
     parser.add_argument('--run-gns-experiment',
-                        dest='run_gns_experiment',
                         action='store_true',
                         help='when enabled we replace step decay with linear decay to enable different batch size runs')
 
+    parser.add_argument('--enable-autoscaler',
+                        action='store_true',
+                        help='when enabled we start measuring gradient stats')
 
     parser.add_argument('--pretrained',
                         dest='pretrained',
@@ -295,9 +295,6 @@ def parse_arguments():
 
     args = parser.parse_args()
 
-    if args.autoscaler_cfg:
-        args.enable_autoscaler = True
-
     return args
 
 
@@ -321,13 +318,23 @@ def setup_training(args):
     args.distributed = True
 
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-    dist.init_process_group(backend='nccl', init_method='env://', timeout=timedelta(seconds=30))
+    dist.init_process_group(backend='nccl', init_method='env://', timeout=timedelta(seconds=60))
     args.rank = int(os.environ["RANK"])
-    #FIXME: change logic for all rank dependent paths for elastic case! Ranks ordering is not guaranteed across restarts
-    args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-{dist.get_rank()}'
 
+    ########## AUTOSCALER SETUP ##########
+    if args.enable_autoscaler:
+        # FIXME: hardcoded
+        args.autoscaler_cfg_path = "/gradstats/resnet50/imagenet/autoscaler.yaml"
+
+
+
+    #NOTE: Rank ordering is not guaranteed across restarts
+    args.logs_basedir = f'{args.log_dir}/{args.label}'
+    args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
+    args.gns_path = f'{args.logs_basedir}/GNS'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
+    make_path_if_not_exists(args.gns_path)
 
     return args
 
@@ -374,6 +381,7 @@ def main_worker(args):
     else:
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch]()
+
     if args.channels_last:
         memory_format = torch.channels_last
     else:
@@ -399,16 +407,15 @@ def main_worker(args):
                                 weight_decay=args.weight_decay)
 
     # wrap optimizer in AdaScale if predicting batch size or adjusting LR
-    current_gbs = get_world_size() * args.batch_size
     if args.enable_autoscaler:
         optimizer = AdaScale(
             optimizer,
-            autoscaler_cfg_path=args.autoscaler_cfg,
-            batch_size=current_gbs,
+            autoscaler_cfg_path=args.autoscaler_cfg_path,
             model=model,
             scaler=scaler,
             summary_writer=writer)
-
+    else:
+        optimizer.scale = 1
     torch.backends.cudnn.benchmark = True
 
     # Data loading code
@@ -446,7 +453,7 @@ def main_worker(args):
                                                num_workers=args.workers,
                                                pin_memory=True,
                                                sampler=train_sampler,
-                                               prefetch_factor=10,
+                                               prefetch_factor=2,
                                                collate_fn=collate_fn)
 
     #FIXME: Check if still okay for elastic scenario
@@ -456,7 +463,7 @@ def main_worker(args):
                                              num_workers=args.workers,
                                              pin_memory=True,
                                              sampler=val_sampler,
-                                             prefetch_factor=10,
+                                             prefetch_factor=2,
                                              collate_fn=collate_fn)
 
     if args.evaluate:
@@ -468,12 +475,10 @@ def main_worker(args):
     args.print_freq = args.print_freq * args.gradient_accumulation_steps
 
     # for elastic we always resume from the latest checkpoint if one exists;
-    state = load_checkpoint(
-        args.checkpoint_file, device_id, args.arch, model, optimizer
-    )
+    state = load_checkpoint(args.checkpoint_file, device_id, args.arch, model, optimizer)
 
     start_epoch = state.epoch + 1
-    print(f"=> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}")
+    print(f"=====> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}")
 
     for epoch in range(args.start_epoch, args.epochs):
         state.epoch = epoch
@@ -483,9 +488,9 @@ def main_worker(args):
 
         if not args.run_gns_experiment:
             adjust_learning_rate(optimizer, epoch, args)
+
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
-              args)
+        train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, writer, epoch, args)
@@ -496,6 +501,7 @@ def main_worker(args):
 
         if get_rank() == 0:
             save_checkpoint(state, is_best, args.checkpoint_file)
+
     # close summary writer
     writer.close()
 
@@ -508,10 +514,6 @@ class data_prefetcher():
                                   0.406 * 255]).cuda().view(1, 3, 1, 1)
         self.std = torch.tensor([0.229 * 255, 0.224 * 255,
                                  0.225 * 255]).cuda().view(1, 3, 1, 1)
-        # With Amp, it isn't necessary to manually convert data to half.
-        # if args.fp16:
-        #     self.mean = self.mean.half()
-        #     self.std = self.std.half()
         self.preload()
 
     def preload(self):
@@ -559,6 +561,7 @@ class data_prefetcher():
 
 global_step = 0 
 
+
 def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args):
     global global_step
     batch_time = AverageMeter('Time', ':6.3f')
@@ -566,17 +569,12 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    
-    lr_scale = 1.0
-    if args.enable_autoscaler:
-        lr_scale = optimizer.scale
-
-
-    world_size = get_world_size() * args.gradient_accumulation_steps
-    scale_one_gbs = int(args.batch_size * world_size // lr_scale)
+ 
+    effective_world_size = get_world_size() * args.gradient_accumulation_steps
+    scale_one_gbs = int(args.batch_size * effective_world_size // optimizer.scale)
     scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_gbs)
 
-    # print("==>", world_size, len(train_loader), scale_one_gbs, scale_one_steps_per_epoch)
+    print("==>", effective_world_size, len(train_loader), scale_one_gbs, scale_one_steps_per_epoch)
 
     progress = ProgressMeter(scale_one_steps_per_epoch,
                              [batch_time, data_time, losses, top1, top5],
@@ -596,8 +594,8 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     while images is not None:
         global_step += 1
         curr_epoch_step += 1
-        # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
-        # which is also the data num_replicas
+        
+        # data scheme is sampling with replacement, scale_one_steps should be invariant for all scales
         if i >= scale_one_steps_per_epoch:
             break
 
@@ -658,9 +656,8 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                 # if running GNS experiments then adjust LR every step - instead of step decay
                 linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
 
-            if get_rank() == 0:
+            if get_rank() == 0 and args.enable_autoscaler:
                 optimizer.log_to_tensorboard(global_step // args.gradient_accumulation_steps)
-                tensorboard_write_time = time.perf_counter() - end
             if curr_epoch_step % args.print_freq == 0 and get_rank() == 0:
                 progress.display(i)
                 writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
@@ -669,10 +666,13 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                 writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
                 writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
                 gain = optimizer.gain()
-                effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
-                print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
+                effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
+                gns = optimizer.gns()
+                print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
                 # flush and push to S3 every 500 iterations FIXME: hardcoded
                 if global_step % 500 == 0:
+                    with open(f'{args.gns_path}/gns_history.txt', 'a') as gns_file:
+                        print(gns, file=gns_file)
                     writer.flush()
         images, target = prefetcher.next()
 
@@ -718,21 +718,13 @@ def validate(val_loader, model, criterion, writer, epoch, args):
     writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
     writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
     writer.flush()
-    upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
-               f'{args.arch}/{args.label}')
+    upload_dir(f'{args.logs_basedir}', args.bucket, f'{args.arch}/{args.label}')
 
     # TODO: this should also be done with the ProgressMeter
-    print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
-                                                                top5=top5))
+    print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1, top5=top5))
 
     return top1.avg
 
-#
-# def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
-#     torch.save(state, filename)
-#     if is_best:
-#         shutil.copyfile(filename, 'model_best.pth.tar')
-#
 
 def save_checkpoint(state: State, is_best: bool, filename: str):
     checkpoint_dir = os.path.dirname(filename)
