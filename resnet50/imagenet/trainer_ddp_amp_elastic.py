@@ -480,7 +480,7 @@ def main_worker(args):
     start_epoch = state.epoch + 1
     print(f"=====> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}")
 
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         state.epoch = epoch
 
         if args.distributed:
