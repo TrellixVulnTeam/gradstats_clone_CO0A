@@ -21,6 +21,7 @@ from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
 import math
 from automl.autoscaler import AdaScale
+from automl.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
 from utils import upload_dir, make_path_if_not_exists
 from datetime import timedelta
@@ -394,7 +395,8 @@ def main_worker(args):
     criterion = nn.CrossEntropyLoss().cuda()
 
     if args.optimizer == "AdamW":
-        optimizer = torch.optim.AdamW(model.parameters(),
+        # use own ADAMW (derived from PT optim)
+        optimizer = AdamW(model.parameters(),
                                 args.lr,
                                 eps=args.eps,
                                 betas=(args.beta1, args.beta2),
@@ -665,14 +667,15 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                 writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
                 writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
                 writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
-                gain = optimizer.gain()
-                effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
-                gns = optimizer.gns()
-                print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
-                # flush and push to S3 every 500 iterations FIXME: hardcoded
-                if global_step % 500 == 0:
+                if args.enable_autoscaler:
+                    gain = optimizer.gain()
+                    effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
+                    gns = optimizer.gns()
+                    print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
+                    # flush and push to S3 every 500 iterations FIXME: hardcoded
                     with open(f'{args.gns_path}/gns_history.txt', 'a') as gns_file:
                         print(gns, file=gns_file)
+                if global_step % 500 == 0:
                     writer.flush()
         images, target = prefetcher.next()
 
