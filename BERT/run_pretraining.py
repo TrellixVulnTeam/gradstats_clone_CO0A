@@ -920,7 +920,7 @@ def main():
                         learning_rate = optimizer.param_groups[0]['lr']
                         if not args.use_adascale:
                             gain = 1.0
-                            adascale_step = global_step 
+                            adascale_step = global_step  # training_steps // args.gradient_accumulation_steps
 
                         if is_main_process():
                             dllogger.log(

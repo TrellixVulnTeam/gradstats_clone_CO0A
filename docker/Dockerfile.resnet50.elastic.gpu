@@ -1,0 +1,38 @@
+# base container with EFA support - needs to be tested
+FROM 763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.9.0-gpu-py38-cu111-ubuntu20.04
+# all the dependencies
+ADD gradstats $HOME/gradstats
+
+# generic deps
+RUN pip install tqdm tensorboard yacs
+
+# mask rcnn deps
+
+# env for custom kernels
+ENV TORCH_CUDA_ARCH_LIST="7.0 7.5 8.0"
+ARG FORCE_CUDA="1"
+ENV FORCE_CUDA=${FORCE_CUDA}
+
+# adascale deps
+WORKDIR $HOME/gradstats/autoscaler
+RUN pip install -e .
+
+# bert deps
+RUN pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger
+
+# resnet deps
+# NONE SO FAR
+
+# Install vim for in-container edits
+RUN apt-get install -q -y vim
+
+WORKDIR /
+
+RUN pip install python-etcd
+ENV ALLOW_NONE_AUTHENTICATION yes
+
+USER root
+ENTRYPOINT ["python", "-m", "torch.distributed.run"]
+# ENTRYPOINT ["torchrun"] # change to this for PT 1.10
+CMD ["--help"]
+

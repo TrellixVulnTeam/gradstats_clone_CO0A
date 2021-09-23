@@ -1,0 +1,63 @@
+apiVersion: eksctl.io/v1alpha5
+availabilityZones:
+- us-east-1b
+- us-east-1a
+iam:
+  vpcResourceControllerPolicy: true
+  withOIDC: true
+kind: ClusterConfig
+metadata:
+  name: mzanur-eks-elastic-use1b
+  region: us-east-1
+  version: "1.21"
+managedNodeGroups:
+- amiFamily: AmazonLinux2
+  availabilityZones:
+  - us-east-1b
+  minSize: 1
+  desiredCapacity: 1
+  maxSize: 32
+  disableIMDSv1: false
+  disablePodIMDS: false
+  iam:
+    withAddonPolicies:
+      albIngress: false
+      appMesh: false
+      appMeshPreview: false
+      autoScaler: false
+      certManager: false
+      cloudWatch: false
+      ebs: false
+      efs: false
+      externalDNS: false
+      fsx: true
+      imageBuilder: false
+      xRay: false
+  instanceSelector: {}
+  instanceType: g4dn.12xlarge
+  labels:
+    alpha.eksctl.io/cluster-name: mzanur-eks-elastic-use1b
+    alpha.eksctl.io/nodegroup-name: worker-elastic-ng
+    role: workers
+  name: worker-elastic-ng
+  privateNetworking: true
+  efaEnabled: false
+  ssh:
+    allow: true
+    publicKeyPath: mzanur-eks
+    enableSsm: true
+  volumeIOPS: 12000
+  volumeSize: 300
+  volumeThroughput: 125
+  volumeType: gp3
+privateCluster:
+  enabled: false
+vpc:
+  autoAllocateIPv6: false
+  cidr: 192.168.0.0/16
+  clusterEndpoints:
+    privateAccess: false
+    publicAccess: true
+  manageSharedNodeSecurityGroupRules: true
+  nat:
+    gateway: Single

@@ -24,6 +24,7 @@ from automl.autoscaler import AdaScale
 from torch.utils.tensorboard import SummaryWriter
 from utils import upload_dir, make_path_if_not_exists
 
+
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
@@ -67,26 +68,10 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-    parser.add_argument(
-        '--enable_gns',
-        default=False,
-        action='store_true',
-        help='Enable gradient noise scale measurement for training run')
-
-    parser.add_argument('--enable_adascale',
-                        default=False,
-                        action='store_true',
-                        help='Enable adascale module for training run')
-
-    parser.add_argument('--gns_smoothing',
-                        type=float,
-                        default=0.0,
-                        help='Smoothing factor for gradient stats.')
-
-    parser.add_argument('--lr_scale',
-                        type=float,
-                        default=1.0,
-                        help='Batch scaling factor for AdaScale.')
+    parser.add_argument('--autoscaler_cfg',
+                        default=None,
+                        type=str,
+                        help='AutoScaler configuration path')
 
     parser.add_argument('-j',
                         '--workers',
@@ -107,15 +92,20 @@ def parse_arguments():
                         metavar='N',
                         help='manual epoch number (useful on restarts)')
 
-    parser.add_argument(
-        '-b',
-        '--batch-size',
-        default=256,
-        type=int,
-        metavar='N',
-        help='mini-batch size (default: 256), this is the total '
-        'batch size of all GPUs when '
-        'using Data Parallel or Distributed Data Parallel')
+    parser.add_argument('-b',
+                        '--batch-size',
+                        default=256,
+                        type=int,
+                        metavar='N',
+                        help='mini-batch size (default: 256), this is the total '
+                            'batch size of all GPUs when '
+                            'using Data Parallel or Distributed Data Parallel')
+
+    parser.add_argument('--gradient-accumulation-steps',
+                        default=1,
+                        type=int,
+                        dest='gradient_accumulation_steps',
+                        help='set to > 1 for larger batch sizes')
 
     parser.add_argument('--lr',
                         '--learning-rate',
@@ -124,6 +114,30 @@ def parse_arguments():
                         metavar='LR',
                         help='initial learning rate',
                         dest='lr')
+
+    parser.add_argument('--optimizer',
+                        default="SGD",
+                        type=str,
+                        metavar='O',
+                        help='Optimizer, one of SGD or AdamW')
+
+    parser.add_argument('--beta1',
+                        default=0.9,
+                        type=float,
+                        help='adamw beta1 (default: 0.9)',
+                        dest='beta1')
+
+    parser.add_argument('--beta2',
+                        default=0.999,
+                        type=float,
+                        help='adamw beta2 (default: 0.999)',
+                        dest='beta2')
+
+    parser.add_argument('--eps',
+                        default=1e-8,
+                        type=float,
+                        help='adamw eps (default: 1e-8)',
+                        dest='eps')
 
     parser.add_argument('--momentum',
                         default=0.9,
@@ -157,6 +171,12 @@ def parse_arguments():
                         dest='evaluate',
                         action='store_true',
                         help='evaluate model on validation set')
+
+    parser.add_argument('--run-gns-experiment',
+                        dest='run_gns_experiment',
+                        action='store_true',
+                        help='when enabled we replace step decay with linear decay to enable different batch size runs')
+
 
     parser.add_argument('--pretrained',
                         dest='pretrained',
@@ -205,15 +225,20 @@ def parse_arguments():
 
     parser.add_argument('--label',
                         type=str,
-                        default="resnet50_training",
+                        default="resnet50_dev_delme",
                         help='label used to create log directory')
 
+    # tensorboard files are pushed to S3 on validation (ideally infrequently)
     parser.add_argument('--bucket',
                         type=str,
                         default='mzanur-autoscaler',
                         help='s3 bucket for tensorboard')
 
     args = parser.parse_args()
+
+    if args.autoscaler_cfg:
+        args.enable_autoscaler = True
+
     return args
 
 
@@ -249,7 +274,6 @@ def setup_training(args):
 
 def main():
     args = parse_arguments()
-
     args = setup_training(args)
     main_worker(args)
 
@@ -303,23 +327,28 @@ def main_worker(args):
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(),
+    if args.optimizer == "AdamW":
+        optimizer = torch.optim.AdamW(model.parameters(),
+                                args.lr,
+                                eps=args.eps,
+                                betas=(args.beta1, args.beta2),
+                                weight_decay=args.weight_decay)
+
+    else:
+        optimizer = torch.optim.SGD(model.parameters(),
                                 args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
     # wrap optimizer in AdaScale if predicting batch size or adjusting LR
-    if args.enable_adascale or args.enable_gns:
+    if args.enable_autoscaler:
         optimizer = AdaScale(
             optimizer,
-            rank=get_rank(),
-            is_adaptive=False,
-            smoothing=None,  # smoothing coefficient determined by scale
+            autoscaler_cfg_path=args.autoscaler_cfg,
+            batch_size=args.batch_size,
+            model=model,
             scaler=scaler,
             summary_writer=writer)
-        optimizer.set_scale(args.lr_scale)
-        print("=> adascale rank", get_rank(), "setting scale to",
-              args.lr_scale)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -366,7 +395,7 @@ def main_worker(args):
         train_sampler = None
         val_sampler = None
     # adjust batch size per worker
-    args.batch_size = args.batch_size // get_world_size()
+    args.batch_size = args.batch_size // (get_world_size() * args.gradient_accumulation_steps)
 
     train_loader = torch.utils.data.DataLoader(train_dataset,
                                                batch_size=args.batch_size,
@@ -378,7 +407,7 @@ def main_worker(args):
                                                collate_fn=collate_fn)
 
     val_loader = torch.utils.data.DataLoader(val_dataset,
-                                             batch_size=args.batch_size,
+                                             batch_size=64, #HARDCODED TO IMAGES PER GPU FIXME args.batch_size,
                                              shuffle=False,
                                              num_workers=args.workers,
                                              pin_memory=False,
@@ -391,10 +420,15 @@ def main_worker(args):
         writer.close()
         return
 
+    # if we are using gradient accumulation then global_step will increment accum times per optimizer update
+    args.print_freq = args.print_freq * args.gradient_accumulation_steps
+
+
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
+        if not args.run_gns_experiment:
+            adjust_learning_rate(optimizer, epoch, args)
         # train for one epoch
         train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
               args)
@@ -414,7 +448,9 @@ def main_worker(args):
                     'state_dict': model.state_dict(),
                     'best_acc1': best_acc1,
                     'optimizer': optimizer.state_dict(),
-                }, is_best)
+                },
+                is_best,
+                filename='checkpoint-{}.pth.tar'.format(epoch+1))
     # close summary writer
     writer.close()
 
@@ -476,111 +512,123 @@ class data_prefetcher():
         return input, target
 
 
-global_step = 0  # this step has been added only for printing purposes, i.e. track progress every print_freq steps
-def train(train_loader, model, criterion, optimizer, scaler, writer, epoch,
-          args):
+global_step = 0 
+
+def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args):
     global global_step
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
     top5 = AverageMeter('Acc@5', ':6.2f')
-    scale_one_bs = int(
-        args.batch_size * get_world_size() // args.lr_scale
-    )  # multiply by world size to account for division earlier
-    scale_one_steps_per_epoch = int(
-        len(train_loader) * args.batch_size // scale_one_bs)
+    
+    lr_scale = 1.0
+    if args.enable_autoscaler:
+        lr_scale = optimizer.scale
+
+    # multiply by world size to account for division earlier
+    world_size = get_world_size() * args.gradient_accumulation_steps
+    scale_one_bs = int(args.batch_size * world_size // lr_scale)
+
+    scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_bs)
+
     progress = ProgressMeter(scale_one_steps_per_epoch,
                              [batch_time, data_time, losses, top1, top5],
-                             prefix="Epoch: [{}]".format(epoch))
+                             prefix="Epoch (SI steps based): [{}]".format(epoch))
 
     # switch to train mode
     model.train()
-    end = time.time()
+    end = time.perf_counter()
 
     prefetcher = data_prefetcher(train_loader)
     images, target = prefetcher.next()
     i = 0
-    adascale_step = 0
+    scheduler_progress = 0
+    total_steps = 90 * scale_one_steps_per_epoch
+    accumulate_gradients = args.gradient_accumulation_steps > 1
+    curr_epoch_step = 0 # only to track grad accumulation related stuff
     while images is not None:
         global_step += 1
-        # `i` below will be progressed as per Adascale gain
-        # i += 1
+        curr_epoch_step += 1
         # Currently use ngpus_per_node, however this should be a dynamic value indicate the num_workers
         # which is also the data num_replicas
-        if i > scale_one_steps_per_epoch:
+        if i >= scale_one_steps_per_epoch:
             break
-        # measure data loading time
-        data_time.update(time.time() - end)
 
+        # measure data loading time
+        data_time.update(time.perf_counter() - end)
+
+        is_last_accumulation_step = curr_epoch_step % args.gradient_accumulation_steps == 0
         # compute output
         with torch.cuda.amp.autocast(enabled=args.amp):
-            output = model(images)
-            loss = criterion(
-                output, target
-            )  #FIXME: this is per worker loss and for logging we may want to do average loss over world
+            if not is_last_accumulation_step:
+                with model.no_sync():
+                    output = model(images)
+                    #FIXME: this is per worker loss and for logging we may want to do average loss over world
+                    loss = criterion(output, target)
+            else:
+                output = model(images)
+                loss = criterion(output, target)
 
-        # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), images.size(0))
-        top1.update(acc1[0], images.size(0))
-        top5.update(acc5[0], images.size(0))
+                # measure accuracy and record loss (on last batch of accumulation)
+                acc1, acc5 = accuracy(output, target, topk=(1, 5))
+                average_factor = images.size(0) # * args.gradient_accumulation_steps
+                losses.update(loss.item(), average_factor)
+                top1.update(acc1[0], average_factor)
+                top5.update(acc5[0], average_factor)
 
-        # compute gradient and do SGD step
-        gns = 0.0
-        gain = 1.0
-        scaler.scale(loss).backward()
-        if args.enable_gns or args.enable_adascale:
-            if args.enable_gns:
-                gns = optimizer.gns(scale_one_batch_size=scale_one_bs)
-            if args.enable_adascale:
-                gain = optimizer.scale_invariant_steps(
-                    aggressive_base_schedule=False)
-                prev_steps = math.floor(adascale_step)
-                adascale_step = adascale_step + gain
-                new_steps = math.floor(adascale_step)
-                scale_invariant_steps = new_steps - prev_steps
-                # progress base scale iteration `i` by scale_invariant_steps
-                i += scale_invariant_steps
-            # modify step according to gain
-            optimizer.step()
+        if accumulate_gradients and not is_last_accumulation_step:
+            with model.no_sync():
+                scaler.scale(loss).backward()
         else:
-            i = global_step
-            scaler.step(optimizer)
+            scaler.scale(loss).backward()
+            # at the last accum step, take one optim step
+            if args.enable_autoscaler:
+                scheduler_progress = optimizer.get_step_increment()
+                i += scheduler_progress
+                optimizer.step()
+            else:
+                i = global_step % (scale_one_steps_per_epoch+1)
+                scheduler_progress = 1
+                scaler.step(optimizer)
+            # update scaler state machine
+            scaler.update()
+            # optimizer.zero_grad()
+            for param in model.parameters():
+                param.grad = None
 
-        scaler.update()
-        # optimizer.zero_grad()
-        for param in model.parameters():
-            param.grad = None
+            #torch.cuda.synchronize()
 
-        #torch.cuda.synchronize()
+            # measure elapsed time
+            batch_time.update(time.perf_counter() - end)
+            end = time.perf_counter()
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
-
-        if global_step % args.print_freq == 0 and get_rank() == 0:
-            progress.display(i)
-            print("=> gain {} gns {}".format(gain, gns))
             # tensorboard summaries are logged based on scale invariant iterations
             # so that we can compare runs (loss values at the same logical stage)
+            # NOTE if writing to S3 directly then make sure that write rate is limited else
+            # S3 writes will fail and you will lose TB logs
             tensorboard_step = scale_one_steps_per_epoch * epoch + i
-            writer.add_scalar('Train/Real Iterations', global_step, tensorboard_step)
-            writer.add_scalar('Train/Gain', gain, tensorboard_step)
-            writer.add_scalar('Train/GNS', gns, tensorboard_step)
-            writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
-            writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
-            writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
-            writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
-            writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
-            # flush and push to S3 every 500 iterations FIXME: hardcoded
-            if global_step % 500 == 0:
-                writer.flush()
-                # update the tensorboard log in s3 bucket
-                upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
-                           f'{args.arch}/{args.label}')
-        images, target = prefetcher.next()
+            if args.run_gns_experiment:
+                # if running GNS experiments then adjust LR every step - instead of step decay
+                linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
 
+            if get_rank() == 0:
+                optimizer.log_to_tensorboard(global_step // args.gradient_accumulation_steps)
+                tensorboard_write_time = time.perf_counter() - end
+            if curr_epoch_step % args.print_freq == 0 and get_rank() == 0:
+                progress.display(i)
+                writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)
+                writer.add_scalar('Train/Accuracy_top1', top1.avg, tensorboard_step)
+                writer.add_scalar('Train/Accuracy_top5', top5.avg, tensorboard_step)
+                writer.add_scalar('Train/Batch_time', batch_time.avg, tensorboard_step)
+                writer.add_scalar('Train/Data_time', data_time.avg, tensorboard_step)
+                gain = optimizer.gain()
+                effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR 
+                print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, optimizer.gns(), scheduler_progress, effective_lr))
+                # flush and push to S3 every 500 iterations FIXME: hardcoded
+                if global_step % 500 == 0:
+                    writer.flush()
+        images, target = prefetcher.next()
 
 def validate(val_loader, model, criterion, writer, epoch, args):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -592,7 +640,7 @@ def validate(val_loader, model, criterion, writer, epoch, args):
 
     # switch to evaluate mode
     model.eval()
-    end = time.time()
+    end = time.perf_counter()
 
     prefetcher = data_prefetcher(val_loader)
     images, target = prefetcher.next()
@@ -611,8 +659,8 @@ def validate(val_loader, model, criterion, writer, epoch, args):
         top5.update(acc5[0], images.size(0))
 
         # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+        batch_time.update(time.perf_counter() - end)
+        end = time.perf_counter()
 
         if i % args.print_freq == 0:
             progress.display(i)
@@ -687,6 +735,15 @@ def adjust_learning_rate(optimizer, epoch, args):
         param_group['lr'] = lr
 
 
+def linear_decay_learning_rate(optimizer, step, total_steps, args):
+    """ linear decay for GNS comparisons """
+    base_lr = args.lr
+    progress = step / total_steps
+    lr = base_lr * (1.0 - progress)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
 def accuracy(output, target, topk=(1, )):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     with torch.no_grad():
@@ -706,4 +763,3 @@ def accuracy(output, target, topk=(1, )):
 
 if __name__ == '__main__':
     main()
-

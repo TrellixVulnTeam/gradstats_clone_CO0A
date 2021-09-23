@@ -1,0 +1,71 @@
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: "resnet50-8x-autoscaler-job"
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:resnet"
+            imagePullPolicy: Always
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_tb autoscaler_adam_8x.yaml"
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                # hugepages-2Mi: 5120Mi
+                # memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim
+          - name: dshm
+            emptyDir:
+              medium: Memory
+    Worker:
+      replicas: 7
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+          - name: "pytorch"
+            image: "427566855058.dkr.ecr.us-east-1.amazonaws.com/mzanur-gradstats:resnet"
+            imagePullPolicy: Always
+            command:
+              - "/bin/sh"
+              - "-c"
+            args:
+            - "cd /gradstats/resnet50/imagenet && scripts/eks/launch_training_adascale_g4.sh 2048 resnet_2048_adascale_tb autoscaler_adam_8x.yaml"
+            resources:
+              limits:
+                nvidia.com/gpu: 4
+                # hugepages-2Mi: 5120Mi
+                # memory: 384000Mi
+                # vpc.amazonaws.com/efa: 1
+            volumeMounts:
+            - name: persistent-volume
+              mountPath: "/shared"
+            - name: dshm
+              mountPath: "/dev/shm"
+          volumes:
+          - name: persistent-volume
+            persistentVolumeClaim:
+              claimName: fsx-claim
+          - name: dshm
+            emptyDir:
+              medium: Memory
+
