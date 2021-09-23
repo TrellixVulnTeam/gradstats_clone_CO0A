@@ -374,23 +374,10 @@ class AdaScale(Optimizer):
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
 
 
-    def _get_norm_squared_orig(self, pg_idx, param, grad):
-        grad = grad.detach()
-        # unscale grads before computing squares - else numbers blow up with scale
-        curr_loss_scale_squared = self._current_loss_scale()**2
-        if not self._precondition_gradients:
-            divisor = curr_loss_scale_squared
-        else:
-            preconditioner = self._calculate_preconditioner(pg_idx, param)
-            divisor = preconditioner * curr_loss_scale_squared
-        norm = torch.nan_to_num(torch.linalg.norm(grad.div(divisor)))
-        return norm ** 2
-
-
+    @torch.no_grad()
     def _get_norm_squared(self, pg_idx, param, grad):
         grad = grad.detach().clone()
         # unscale grads before computing squares - else numbers blow up with scale
-        # curr_loss_scale_squared = torch.tensor(self._current_loss_scale()**2, dtype=torch.float32, device=grad.device, requires_grad=False) # self._current_loss_scale()**2
         divisor = self._loss_scale_squared
         if not self._precondition_gradients:
             preconditioner = self._calculate_preconditioner(pg_idx, param)
@@ -411,7 +398,7 @@ class AdaScale(Optimizer):
                 total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
         return total_grad_sqr
 
-
+    @torch.no_grad()
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
@@ -450,6 +437,7 @@ class AdaScale(Optimizer):
         self._final_callback_queued = True
         Variable._execution_engine.queue_callback(self._final_callback)
 
+    @torch.no_grad()
     def _final_callback(self) -> None:
         # This method should be invoked once for each backward pass, after
         # gradients have been synchronized between each worker, unless we
@@ -536,7 +524,7 @@ class AdaScale(Optimizer):
             # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
             grad_sqr = total_grad_sqr - grad_var / S
         else:
-            # THIS MAY NOT BE CORRECT - TODO: derive else raise NotSupportedException for S=1
+            # for S=1
             grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
             grad_sqr = total_grad_sqr - grad_var / cN
 
@@ -648,6 +636,7 @@ class AdaScale(Optimizer):
         self.param_groups = self._optimizer.param_groups
         return res
 
+
     def add_param_group(self, pg: Dict) -> None:
         """ Support adding parameter groups
 
@@ -670,10 +659,12 @@ class AdaScale(Optimizer):
             self._adascale_state[name] = np.append(self._adascale_state[name], val)
             assert self._adascale_state[name].shape == (len(self._optimizer.param_groups),)
 
+
     def zero_grad(self) -> None:
         """Proxy function to optimizer, because some training loops need this."""
         assert self._local_grad_sqr is None, "Don't zero_grad in backward"
         return self._optimizer.zero_grad()
+
 
     def state_dict(self) -> Dict:
         """ Proxy function to optimizer, checkpointing needs this.
@@ -702,12 +693,6 @@ class AdaScale(Optimizer):
             print("IN AUTOSCALER RESTORED SI", self._adascale_state['scale_invariant_steps'])
         return self._optimizer.load_state_dict(data)
 
-    def rescale_training_cluster(self, scale:int, num_gradients_to_accumulate: int, smoothing: float = True,) -> None:
-        """
-        TODO: This is probably the entrypoint for training manager to indicate update in scale
-        """
-        raise NotImplementedError
-
 
     def _calculate_preconditioner(self, pg_idx, param):
         """
@@ -717,7 +702,8 @@ class AdaScale(Optimizer):
         ignore batch size predictions initially
         Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
         TODO: Investigate other preconditioners
-        FIXME: This is call is expensive - optimize this for step time
+        TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam.
+        Older FusedAdam support (slower for getting preconditiner) is available in previous commits.
         """
         if self._real_iterations < self._MIN_STEPS or \
                 not self._precondition_gradients or \
@@ -725,7 +711,7 @@ class AdaScale(Optimizer):
             return torch.ones_like(param, memory_format=torch.preserve_format)
         # get current state for param
         state = self._optimizer.state[param]
-        pinv = state['denom'] #TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam
+        pinv = state['denom']
         return pinv
 
 
