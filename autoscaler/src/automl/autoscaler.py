@@ -78,7 +78,9 @@ class AdaScale(Optimizer):
         self._precondition_gradients = self.cfg.precondition_gradients
         self._use_pt_adam = self.cfg.use_pt_adam
         self._hook_handles: List[Any] = []
-        self._hook()
+
+        # disable hook because we register hooks through DDP comm hook instead
+        # self._hook()
 
         # general setup of variables internal to AdaScale functioning
         self._setup()
