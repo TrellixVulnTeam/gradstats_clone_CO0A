@@ -332,10 +332,10 @@ def setup_training(args):
     #NOTE: Rank ordering is not guaranteed across restarts
     args.logs_basedir = f'{args.log_dir}/{args.label}'
     args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
-    args.gns_path = f'{args.logs_basedir}/GNS'
+#    args.gns_path = f'{args.logs_basedir}/GNS'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
-    make_path_if_not_exists(args.gns_path)
+#    make_path_if_not_exists(args.gns_path)
 
     return args
 
@@ -503,6 +503,10 @@ def main_worker(args):
 
         if get_rank() == 0:
             save_checkpoint(state, is_best, args.checkpoint_file)
+            if args.enable_autoscaler:
+                # this fires a GNS info to be logged in S3 scaling service reads this info
+                # and initiates a resize if needed
+                optimizer.check_for_cluster_resize()
 
     # close summary writer
     writer.close()
@@ -672,9 +676,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                     effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
                     gns = optimizer.gns()
                     print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
-                    # flush and push to S3 every 500 iterations FIXME: hardcoded
-                    with open(f'{args.gns_path}/gns_history.txt', 'a') as gns_file:
-                        print(gns, file=gns_file)
+                # flush and push to S3 every 500 iterations FIXME: hardcoded
                 if global_step % 500 == 0:
                     writer.flush()
         images, target = prefetcher.next()

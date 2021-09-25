@@ -1,10 +1,14 @@
 autoscaler:
+  training_label: "r50_elastic_4_delme"
+  log_dir: "/shared/logs"
   enable_debug: Off
   collect_tensorboard: On
   world_size: 0
   scale: 1.0
+  cluster_state_update_interval: 500
   update_interval: 1
   precondition_gradients: On
+  gradient_accumulation_supported: True
   num_gradients_to_accumulate: 1
   adjust_gradients_for_accumulation: False
   smoothing: null

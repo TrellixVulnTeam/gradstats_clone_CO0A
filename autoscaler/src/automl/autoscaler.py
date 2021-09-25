@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.optim import Optimizer
 from .config import AutoScalerConfig
 from apex import amp
-
+from path_utils import make_path_if_not_exists
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -52,11 +52,31 @@ class AdaScale(Optimizer):
         self._world_size = (self.cfg.world_size if self.cfg.world_size != 0 else 
                                 dist.get_world_size() if dist.is_initialized() else 1) 
         self._rank = dist.get_rank() if dist.is_initialized() else 0
+
         # TODO: check runtime impact of updating statistics more infrequently
+        if self.cfg.update_interval > 1:
+            raise NotImplementedError
+
         self._update_interval = self.cfg.update_interval
+        # The interval at which GNS/current cluster state is written to log
+        # self._cluster_state_update_interval = self.cfg.cluster_state_update_interval
+        self._s3_bucket = self.cfg.s3_bucket
+        self._training_label = self.cfg.training_label
+        self._log_dir = self.cfg.log_dir
+        logs_basedir = f'{self._log_dir}/{self._training_label}'
+        self._cluster_state_path = f'{logs_basedir}/GNS'
+        make_path_if_not_exists(self._cluster_state_path)
+
+        # boolean indicating if accumulation already takes care of accum division in
+        # main training loop
         self._adjust_grads_for_accumulation = self.cfg.adjust_gradients_for_accumulation
         self._num_grads_to_accum = self.cfg.num_gradients_to_accumulate
+        # boolean indicating if gradient accumulation is implemented by training script
+        self._gradient_accumulation_supported = self.cfg.gradient_accumulation_supported
+        if not self._gradient_accumulation_supported:
+            self._num_grads_to_accum = 1
         self._num_grad_samples = self._world_size * self._num_grads_to_accum
+        assert self._num_grad_samples > 1, "AutoScaler needs DDP or gradient accumulation enabled"
         self._smoothing = self.cfg.smoothing
         if self._smoothing is None:
             self._smoothing = max(1 - self._num_grad_samples / 1000, 0)
@@ -67,6 +87,7 @@ class AdaScale(Optimizer):
         # this is used to track the batch size changes during dynamic training,
         # also used for adjusting temperature for gns predictions
         self._current_batch_size = self._scale_one_batch_size * self._num_grad_samples
+
         #TODO: customize configuration based on scale if file present
 
         self._max_grad_norm = self.cfg.max_grad_norm
@@ -296,6 +317,7 @@ class AdaScale(Optimizer):
             return np.power(self.scale * self.scale * gain, 1./3)
         return gain
 
+
     def gain(self, pg_idx: Optional[int] = None, alpha=0.5) -> float:
         """
         Current estimate of the AdaScale gain ratio (r_t in the paper).
@@ -324,6 +346,7 @@ class AdaScale(Optimizer):
         gain = (var + sqr) / (var / max_scale + sqr)
         self._gain = gain
         return gain
+
 
     def gns(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -357,7 +380,9 @@ class AdaScale(Optimizer):
         self._gns = min(gns, self._batch_size_upper_limit)
         # self._gns = gns * self.temperature
         self._update_avg("gns_avg", np.array([self._gns]), 0.9)
-        return self._adascale_state["gns_avg"]
+        averaged_gns = self._adascale_state["gns_avg"]
+        return averaged_gns
+
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
             # This function computes and stores the moving average of a vector
@@ -369,6 +394,7 @@ class AdaScale(Optimizer):
             self._adascale_state[name + "_biased"] = biased
             self._adascale_state[name + "_unbias"] = unbias
             self._adascale_state[name] = biased / unbias
+
 
     def _current_loss_scale(self):
         return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
@@ -398,6 +424,7 @@ class AdaScale(Optimizer):
                 total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
         return total_grad_sqr
 
+
     @torch.no_grad()
     def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
         # This method should be invoked once for each parameter during the
@@ -412,7 +439,6 @@ class AdaScale(Optimizer):
                                                 device=grad.device,
                                                 requires_grad=False,
                                                 dtype=torch.float64)
-            # curr_loss_scale_squared = torch.tensor(self._current_loss_scale()**2, dtype=torch.float32, device=grad.device, requires_grad=False) 
             self._loss_scale_squared = self._current_loss_scale()**2
 
         # we want accum copies of local_grad_sqr per worker 
@@ -436,6 +462,7 @@ class AdaScale(Optimizer):
             return
         self._final_callback_queued = True
         Variable._execution_engine.queue_callback(self._final_callback)
+
 
     @torch.no_grad()
     def _final_callback(self) -> None:
@@ -687,7 +714,6 @@ class AdaScale(Optimizer):
                 associated AdaScale internal states are not saved in the checkpoint.
         """
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
-        # SHOULD LOAD ADASCALE STATE HERE
         self._adascale_state = data['state']['adascale']
         if self._enable_debug:
             print("IN AUTOSCALER RESTORED SI", self._adascale_state['scale_invariant_steps'])
@@ -718,9 +744,9 @@ class AdaScale(Optimizer):
     def log_to_tensorboard(self, real_iteration):
         scale_invariant_steps = self._adascale_state['scale_invariant_steps']
         self._summary_writer.add_scalar('Train/Real Iterations', real_iteration, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/Gain', self._gain, scale_invariant_steps)
-        # self._summary_writer.add_scalar('Train/var', self._nonsmooth_var[0], scale_invariant_steps)
-        # self._summary_writer.add_scalar('Train/sqr', self._nonsmooth_sqr[0], scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/gain', self._gain, scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/var_curr', self._nonsmooth_var[0], scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
         self._summary_writer.add_scalar('Train/temperature', self._temperature, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/var_si', self._var, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/sqr_si', self._sqr, scale_invariant_steps)
@@ -732,4 +758,18 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/sqr', self._sqr, real_iteration)
         self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
-        # self._summary_writer.flush()
+
+    def check_for_cluster_resize():
+        """
+        Writes current cluster state to a file and pushes it to S3.
+        This may trigger a cluster resize. It is important that a 
+        checkpoint is saved before this is called.
+        """
+        # if self._real_iterations % self._cluster_state_update_interval == 0:
+        with open(f'{self._cluster_state_path}/gns_history.txt', 'a') as gns_file:
+            print(f'{self._current_batch_size},{self._world_size},'
+                    '{self._gradient_accumulation_supported},'
+                    '{self._scale_one_batch_size}'
+                    '{self._num_grads_to_accum},{averaged_gns}', file=gns_file)
+
+
