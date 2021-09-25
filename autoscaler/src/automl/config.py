@@ -17,6 +17,7 @@ class AutoScalerConfig:
         autoscaler_config = config['autoscaler']
         adascale_config = config['adascale']
         gns_config = config['gradient_noise_scale']
+        self.model_name = autoscaler_config['model_name']
         self.training_label = autoscaler_config['training_label']
         self.log_dir = autoscaler_config['log_dir']
         #self.cluster_state_update_interval = autoscaler_config['cluster_state_update_interval']

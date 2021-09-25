@@ -61,6 +61,7 @@ class AdaScale(Optimizer):
         # The interval at which GNS/current cluster state is written to log
         # self._cluster_state_update_interval = self.cfg.cluster_state_update_interval
         self._s3_bucket = self.cfg.s3_bucket
+        self._model_name = self.cfg.model_name
         self._training_label = self.cfg.training_label
         self._log_dir = self.cfg.log_dir
         logs_basedir = f'{self._log_dir}/{self._training_label}'
@@ -759,6 +760,7 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
 
+
     def check_for_cluster_resize():
         """
         Writes current cluster state to a file and pushes it to S3.
@@ -766,10 +768,14 @@ class AdaScale(Optimizer):
         checkpoint is saved before this is called.
         """
         # if self._real_iterations % self._cluster_state_update_interval == 0:
-        with open(f'{self._cluster_state_path}/gns_history.txt', 'a') as gns_file:
+        gns_filepath = f'{self._cluster_state_path}/gns_history.txt'
+        with open(gns_filepath, 'a') as gns_file:
             print(f'{self._current_batch_size},{self._world_size},'
                     '{self._gradient_accumulation_supported},'
                     '{self._scale_one_batch_size}'
                     '{self._num_grads_to_accum},{averaged_gns}', file=gns_file)
 
+        # push file to S3
+        s3_prefix = f'{self._model_name}/{self._training_label}/GNS/gns_history.txt'
+        upload_file(gns_filepath, self._s3_bucket, s3_prefix)
 

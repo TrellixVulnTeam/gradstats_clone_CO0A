@@ -47,7 +47,7 @@ def upload_file(filepath, bucket, s3_prefix):
         return False
     return True
 
-def read_s3_textfile(bucket, s3_prefix):
+def read_s3_textfile(bucket_name, s3_prefix):
     s3 = boto3.client('s3')
     # bucket_name = 'mzanur-autoscaler'
     # key = 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt'
@@ -67,5 +67,6 @@ def make_path_if_not_exists(dirpath):
         os.makedirs(dirpath, exist_ok=True)
         print(f"{dirpath} created")
 
-# if __name__ == "__main__":
-#     upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')
+if __name__ == "__main__":
+    # upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')
+    upload_file('test_upload', 'mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/test_upload')

@@ -33,10 +33,25 @@ def is_global_rank_zero():
         return True
     return False
 
+
 def make_path_if_not_exists(dirpath):
     if not os.path.exists(dirpath):
         os.makedirs(dirpath, exist_ok=True)
         print(f"{dirpath} created")
 
-# if __name__ == "__main__":
-#     upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')
+
+def read_s3_textfile(bucket, s3_prefix):
+    s3 = boto3.client('s3')
+    # bucket_name = 'mzanur-autoscaler'
+    # key = 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt'
+    # key = f'{model_name}/{training_label}/GNS/gns_history.txt'
+    s3_object = s3.get_object(Bucket=bucket, Key=s3_prefix)
+    body = s3_object['Body']
+    text = body.read().decode('utf-8')
+    return text
+
+
+if __name__ == "__main__":
+    # txt = read_s3_textfile('mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt')
+    # print(txt)
+    # upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')

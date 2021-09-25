@@ -296,6 +296,9 @@ def parse_arguments():
 
     args = parser.parse_args()
 
+    # if gradient accumulation file is found in S3 (written by autoscaler service,)
+    # then use that file to update accumulation steps else use value passed in args
+    
     return args
 
 
