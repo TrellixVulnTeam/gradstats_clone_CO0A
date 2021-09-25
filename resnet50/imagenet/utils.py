@@ -27,6 +27,26 @@ def upload_dir(file_dir, bucket, s3_prefix):
                 return False
     return True
 
+def upload_file(filepath, bucket, s3_prefix):
+    """Upload a file to an S3 bucket
+
+    :param filepath: File to upload
+    :param bucket: Bucket to upload to
+    :param s3_prefix: s3 path prefix
+    :return: True if file was uploaded, else False
+    """
+
+    # Upload the dir
+    s3_client = boto3.client('s3')
+    try:
+        response = s3_client.upload_file(filepath,
+                                         bucket,
+                                         s3_prefix)
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
+
 
 def is_global_rank_zero():
     if torch.distributed.get_rank() == 0:
@@ -49,9 +69,13 @@ def read_s3_textfile(bucket, s3_prefix):
     body = s3_object['Body']
     text = body.read().decode('utf-8')
     return text
-
-
+    
 if __name__ == "__main__":
-    # txt = read_s3_textfile('mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt')
-    # print(txt)
+    try:
+        upload_file('cluster_detail', 'mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/cluster_detail')
+        txt = read_s3_textfile('mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/cluster_detail')
+        print(txt.splitlines()[-1])
+    except ClientError as e:
+        print('Something went wrong')
     # upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')
+    pass
