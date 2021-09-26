@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.optim import Optimizer
 from .config import AutoScalerConfig
 from apex import amp
-from path_utils import make_path_if_not_exists
+from .path_utils import make_path_if_not_exists
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -761,7 +761,7 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
 
 
-    def check_for_cluster_resize():
+    def check_for_cluster_resize(self):
         """
         Writes current cluster state to a file and pushes it to S3.
         This may trigger a cluster resize. It is important that a 

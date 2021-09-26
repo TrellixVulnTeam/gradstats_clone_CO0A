@@ -21,12 +21,29 @@ async def test_async_change_num_nodes():
     print(result)
 
 
-
 def test_get_current_gns():
     result = get_current_gns('resnet50', 'mzanur-autoscaler', 'r50_elastic_1_delme')
     return result
 
 
+def upload_file(filepath, bucket, s3_prefix):
+    """Upload a file to an S3 bucket
+
+    :param filepath: File to upload
+    :param bucket: Bucket to upload to
+    :param s3_prefix: s3 path prefix
+    :return: True if file was uploaded, else False
+    """
+    # Upload the dir
+    s3_client = boto3.client('s3')
+    try:
+        response = s3_client.upload_file(filepath,
+                                         bucket,
+                                         s3_prefix)
+    except ClientError as e:
+        logging.error(e)
+        return False
+    return True
 
 
 class ClusterScaler(object):
@@ -97,13 +114,24 @@ class ClusterScaler(object):
                 ready = 0
 
 
+
     def run(self):
         while True:
-            with open('/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/service/debug', 'w') as f:
-                print("RUNNNIG", file=f)
+            # with open('/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/service/debug', 'w') as f:
+            #     print("RUNNNIG", file=f)
             time.sleep(self._poll_interval)
             # check current GNS prediction
             self.get_current_gns()
+            ### DECIDE IF YOU WANT A NEW CLUSTER RECOMMENDATION TODO: hardcoded for now ###
+            new_num_nodes = 1
+            new_grad_accumulation_steps = 2
+            filepath = '/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/service/node_state'
+            with open(filepath, 'w') as f:
+                print(f'{new_num_nodes},{new_grad_accumulation_steps}', file=f)
+            # push to S3
+            prefix = f'{self._model_name}/{self._training_label}/GNS/node_state'
+            upload_file(filepath, 'mzanur-autoscaler', prefix)
+
 
 
 class Sc4l3rDaemon(Daemon):
@@ -118,7 +146,7 @@ class Sc4l3rDaemon(Daemon):
             'r50_elastic_1_delme',
             min_nodes=1,
             max_nodes=8,
-            poll_interval=1)
+            poll_interval=30)
 
     def run(self):
         self._scaler.run()

@@ -23,7 +23,7 @@ import math
 from automl.autoscaler import AdaScale
 from automl.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
-from utils import upload_dir, make_path_if_not_exists
+from utils import upload_dir, make_path_if_not_exists, read_s3_textfile
 from datetime import timedelta
 
 
@@ -298,7 +298,22 @@ def parse_arguments():
 
     # if gradient accumulation file is found in S3 (written by autoscaler service,)
     # then use that file to update accumulation steps else use value passed in args
-    
+    try:
+        # FIXME: hardcoded for now 
+        s3_prefix = 'resnet50/r50_elastic_1_delme/GNS/node_state'
+        text = read_s3_textfile(args.bucket, s3_prefix)
+        # read last line
+        text = text.splitlines()[-1]
+        num_nodes, grad_accum_steps = [int(col) for col in text.split(',')]
+        assert num_nodes == get_world_size(), "At this point cluster resize \
+                should have been completed by EKS. Recommendation from autoscaler \
+                should match current nodes"
+        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
+        args.gradient_accumulation_steps = grad_accum_steps
+    except Exception as e:
+        print(e)
+        print('Cannot find any recommendation from autoscaler service, continuing as before')
+     
     return args
 
 
