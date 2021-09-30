@@ -23,7 +23,7 @@ import math
 from automl.autoscaler import AdaScale
 from automl.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
-from utils import upload_dir, make_path_if_not_exists
+from utils import upload_dir, make_path_if_not_exists, read_s3_textfile
 from datetime import timedelta
 
 
@@ -296,6 +296,25 @@ def parse_arguments():
 
     args = parser.parse_args()
 
+    # if gradient accumulation file is found in S3 (written by autoscaler service,)
+    # then use that file to update accumulation steps else use value passed in args
+    try:
+        # FIXME: hardcoded for now 
+        s3_prefix = 'resnet50/r50_elastic_1_delme/GNS/node_state'
+        text = read_s3_textfile(args.bucket, s3_prefix)
+        # read last line
+        text = text.splitlines()[-1]
+        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
+        # TODO: check -> num_workers = number of DDP processes
+        assert num_workers == get_world_size(), "At this point cluster resize \
+                should have been completed by EKS. Recommendation from autoscaler \
+                should match current nodes"
+        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
+        args.gradient_accumulation_steps = grad_accum_steps
+    except Exception as e:
+        print(e)
+        print('Cannot find any recommendation from autoscaler service, continuing as before')
+     
     return args
 
 
@@ -332,10 +351,10 @@ def setup_training(args):
     #NOTE: Rank ordering is not guaranteed across restarts
     args.logs_basedir = f'{args.log_dir}/{args.label}'
     args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
-    args.gns_path = f'{args.logs_basedir}/GNS'
+#    args.gns_path = f'{args.logs_basedir}/GNS'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
-    make_path_if_not_exists(args.gns_path)
+#    make_path_if_not_exists(args.gns_path)
 
     return args
 
@@ -503,6 +522,10 @@ def main_worker(args):
 
         if get_rank() == 0:
             save_checkpoint(state, is_best, args.checkpoint_file)
+            if args.enable_autoscaler:
+                # this fires a GNS info to be logged in S3 scaling service reads this info
+                # and initiates a resize if needed
+                optimizer.check_for_cluster_resize()
 
     # close summary writer
     writer.close()
@@ -596,7 +619,10 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     while images is not None:
         global_step += 1
         curr_epoch_step += 1
-        
+       
+        ###### DEBUG ########
+        # scale_one_steps_per_epoch = 1000
+        #####################
         # data scheme is sampling with replacement, scale_one_steps should be invariant for all scales
         if i >= scale_one_steps_per_epoch:
             break
@@ -672,9 +698,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                     effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
                     gns = optimizer.gns()
                     print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
-                    # flush and push to S3 every 500 iterations FIXME: hardcoded
-                    with open(f'{args.gns_path}/gns_history.txt', 'a') as gns_file:
-                        print(gns, file=gns_file)
+                # flush and push to S3 every 500 iterations FIXME: hardcoded
                 if global_step % 500 == 0:
                     writer.flush()
         images, target = prefetcher.next()

@@ -47,35 +47,26 @@ def upload_file(filepath, bucket, s3_prefix):
         return False
     return True
 
+def read_s3_textfile(bucket_name, s3_prefix):
+    s3 = boto3.client('s3')
+    # bucket_name = 'mzanur-autoscaler'
+    # key = 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt'
+    # key = f'{model_name}/{training_label}/GNS/gns_history.txt'
+    s3_object = s3.get_object(Bucket=bucket_name, Key=s3_prefix)
+    body = s3_object['Body']
+    text = body.read().decode('utf-8')
+    return text
 
 def is_global_rank_zero():
     if torch.distributed.get_rank() == 0:
         return True
     return False
 
-
 def make_path_if_not_exists(dirpath):
     if not os.path.exists(dirpath):
         os.makedirs(dirpath, exist_ok=True)
         print(f"{dirpath} created")
 
-
-def read_s3_textfile(bucket, s3_prefix):
-    s3 = boto3.client('s3')
-    # bucket_name = 'mzanur-autoscaler'
-    # key = 'resnet50/r50_elastic_1_delme/GNS/gns_history.txt'
-    # key = f'{model_name}/{training_label}/GNS/gns_history.txt'
-    s3_object = s3.get_object(Bucket=bucket, Key=s3_prefix)
-    body = s3_object['Body']
-    text = body.read().decode('utf-8')
-    return text
-    
 if __name__ == "__main__":
-    try:
-        upload_file('cluster_detail', 'mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/cluster_detail')
-        txt = read_s3_textfile('mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/cluster_detail')
-        print(txt.splitlines()[-1])
-    except ClientError as e:
-        print('Something went wrong')
     # upload_dir('/mnt/logs/1622161704', 'mzanur-autoscaler', 'resnet_test')
-    pass
+    upload_file('test_upload', 'mzanur-autoscaler', 'resnet50/r50_elastic_1_delme/GNS/test_upload')
