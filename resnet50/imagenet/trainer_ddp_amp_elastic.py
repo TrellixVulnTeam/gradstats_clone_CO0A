@@ -304,8 +304,9 @@ def parse_arguments():
         text = read_s3_textfile(args.bucket, s3_prefix)
         # read last line
         text = text.splitlines()[-1]
-        num_nodes, grad_accum_steps = [int(col) for col in text.split(',')]
-        assert num_nodes == get_world_size(), "At this point cluster resize \
+        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
+        # TODO: check -> num_workers = number of DDP processes
+        assert num_workers == get_world_size(), "At this point cluster resize \
                 should have been completed by EKS. Recommendation from autoscaler \
                 should match current nodes"
         print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
@@ -618,7 +619,10 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     while images is not None:
         global_step += 1
         curr_epoch_step += 1
-        
+       
+        ###### DEBUG ########
+        # scale_one_steps_per_epoch = 1000
+        #####################
         # data scheme is sampling with replacement, scale_one_steps should be invariant for all scales
         if i >= scale_one_steps_per_epoch:
             break

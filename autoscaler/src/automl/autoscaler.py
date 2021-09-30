@@ -1,6 +1,6 @@
 import functools
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
-
+import time
 import math
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch.optim import Optimizer
 from .config import AutoScalerConfig
 from apex import amp
-from .path_utils import make_path_if_not_exists
+from .path_utils import make_path_if_not_exists, upload_file
 
 if TYPE_CHECKING:  # pragma: no cover
     from torch.optim.optimizer import _params_t
@@ -87,7 +87,7 @@ class AdaScale(Optimizer):
         self._scale = int(self._num_grad_samples // self._scale_one_world_size)
         # this is used to track the batch size changes during dynamic training,
         # also used for adjusting temperature for gns predictions
-        self._current_batch_size = self._scale_one_batch_size * self._num_grad_samples
+        self._current_batch_size = self._scale_one_batch_size * self._scale # self._num_grad_samples
 
         #TODO: customize configuration based on scale if file present
 
@@ -381,8 +381,8 @@ class AdaScale(Optimizer):
         self._gns = min(gns, self._batch_size_upper_limit)
         # self._gns = gns * self.temperature
         self._update_avg("gns_avg", np.array([self._gns]), 0.9)
-        averaged_gns = self._adascale_state["gns_avg"]
-        return averaged_gns
+        self._averaged_gns = int(self._adascale_state["gns_avg"][0])
+        return self._averaged_gns
 
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
@@ -770,10 +770,12 @@ class AdaScale(Optimizer):
         # if self._real_iterations % self._cluster_state_update_interval == 0:
         gns_filepath = f'{self._cluster_state_path}/gns_history.txt'
         with open(gns_filepath, 'a') as gns_file:
+            timestamp = int(time.time())
             print(f'{self._current_batch_size},{self._world_size},'
-                    '{self._gradient_accumulation_supported},'
-                    '{self._scale_one_batch_size}'
-                    '{self._num_grads_to_accum},{averaged_gns}', file=gns_file)
+                    f'{self._gradient_accumulation_supported},'
+                    f'{self._scale_one_batch_size},'
+                    f'{self._num_grads_to_accum},{self._averaged_gns},{timestamp}',
+                    file=gns_file)
 
         # push file to S3
         s3_prefix = f'{self._model_name}/{self._training_label}/GNS/gns_history.txt'
