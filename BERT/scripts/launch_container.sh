@@ -1,7 +1,15 @@
+
+ACCOUNT=763104351884
+REGION=us-east-1
+TAG=1.8.1-gpu-py36-cu111-ubuntu18.04
+aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com
+
+
 CONTAINER_NAME=bert
 CODE_MOUNT="-v /fsx/:/fsx"
 
-IMAGE=763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:1.8.1-gpu-py36-cu111-ubuntu18.04
+IMAGE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/pytorch-training:${TAG}"
+#763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:
 
 
 docker run --runtime=nvidia --gpus 8  \
