@@ -370,7 +370,7 @@ class AdaScale(Optimizer):
             return self._gns
         if self._gain_invalid[0] != 0:
             # fall back to moving average
-            self._gns = self._adascale_state["gns_avg"]
+            self._gns = int(self._adascale_state["gns_avg"][0])
             return self._gns
         var = self._grad_var_avg(pg_idx)
         sqr = self._grad_sqr_avg(pg_idx)

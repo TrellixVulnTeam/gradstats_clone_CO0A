@@ -126,6 +126,7 @@ class ClusterScaler(object):
         Scenario 1 will use kubectl create --save-config
         Scenario 2 will apply cluster changes on top of scenario 1 config
         """
+        result = False
         if not rescale_existing:
             # scenario 1
             # a. start num_nodes in cluster (c-tor)
@@ -135,19 +136,21 @@ class ClusterScaler(object):
             output = subprocess.check_output(f"kubectl create --save-config -f {self._out_yaml}", shell=True)
             print("Launched training job...")
             time.sleep(60)
+            result = True
         else:
             # scenario 2 - check nodes in cluster, if scaling down, prepare yaml, apply yaml
             # TODO: check which nodes are not running job or etcd and bring them down gracefully
             # if scaling up then, prepare yaml, provision new nodes, on successful provision apply yaml
-            result = asyncio.run(self._scale_cluster(num_nodes, timeout=1200)) # provisioning (cold-start) can take significantly long - JACUZZI!
+            result = asyncio.run(self._scale_cluster(num_nodes, timeout=3600)) # provisioning (cold-start) can take significantly long - JACUZZI!
             if result:
                 self._prepare_training_job_yaml(num_nodes)
                 output = subprocess.check_output(f"kubectl apply -f {self._out_yaml}", shell=True)
                 print("Applied new configuration to scale training job...")
             else:
                 print("Scaling cluster failed... keeping cluster as before")
-        output = subprocess.check_output(f"kubectl get pods -n elastic-job", shell=True)
-        print(output)
+        # output = subprocess.check_output(f"kubectl get pods -n elastic-job", shell=True)
+        # print(output)
+        return result
 
 
     def _change_num_nodes(self, desired_num_nodes):
@@ -174,7 +177,7 @@ class ClusterScaler(object):
         this will loop endlessly!
         """
         while True:
-            await asyncio.sleep(10)
+            await asyncio.sleep(1)
             ready = self._get_current_ready_nodes()
             if ready == desired_num_nodes:
                 return True
@@ -197,26 +200,29 @@ class ClusterScaler(object):
         self._last_scale_timestamp = timestamp
         desired_scaling_factor = gns // scale_one_bs
         current_scaling_factor = current_bs // scale_one_bs
-        print(f'current_bs, gns, desired_scaling_factor={desired_scaling_factor}, current_scaling_factor={current_scaling_factor}')
+        print(f'current_bs={current_bs}, gns={gns}, desired_scaling_factor={desired_scaling_factor}, current_scaling_factor={current_scaling_factor}')
         nodes_required = desired_scaling_factor
         if desired_scaling_factor <= current_scaling_factor:
             trigger_scaling = False #TODO: downscaling cluster not supported initially
         elif nodes_required > self._max_nodes:
+            nodes_required = self._max_nodes
             # check if gradient accumulation is supported
             if grad_accum_supported:
                 # calculate num grad accum steps (keep per-gpu batch size same)
                 new_bs = desired_scaling_factor * scale_one_bs
                 bs_per_gpu_without_accum = int(current_bs / current_num_workers / num_grads_accumulated)
-                print("Batch size per GPU without accumulation:", bs_per_gpu_without_accum)
                 new_bs_per_gpu = int(new_bs / self._max_nodes / self._gpus_per_node)
                 new_grad_accum_steps = new_bs_per_gpu // bs_per_gpu_without_accum
-                print("New accumulation steps:", new_grad_accum_steps)
+                if new_grad_accum_steps == num_grads_accumulated:
+                    print("New accumulation steps:", new_grad_accum_steps, "Same as before - no scaling!")
+                    trigger_scaling = False
                 trigger_scaling = True
             else:
                 trigger_scaling = False
         else:
             # until we exhaust nodes do not add gradient accumulation
             trigger_scaling = True
+        print("Scaling recommendation:", trigger_scaling, nodes_required, new_grad_accum_steps)
         return trigger_scaling, nodes_required, new_grad_accum_steps
 
 
@@ -229,17 +235,22 @@ class ClusterScaler(object):
             time.sleep(self._poll_interval)
             # check current GNS prediction
             current_cluster_state = self._get_current_cluster_state()
-            print(current_cluster_state)
             if current_cluster_state:
+                print(current_cluster_state)
                 trigger_scaling, nodes_required, new_grad_accum_steps = self._get_scaling_recommendation(current_cluster_state)
-                print("#############", trigger_scaling, nodes_required, new_grad_accum_steps, "##############")
                 if trigger_scaling:
                     with open(self._nodestate_file, 'w') as f:
                         print(f'{nodes_required},{new_grad_accum_steps}', file=f)
                     # push to S3
                     prefix = f'{self._model_name}/{self._training_label}/GNS/node_state'
                     upload_file(self._nodestate_file, 'mzanur-autoscaler', prefix)
-                    self._launch_training_job(nodes_required, rescale_existing=True)
+                    if self._get_current_ready_nodes() < nodes_required:
+                        result = self._launch_training_job(nodes_required, rescale_existing=True)
+                    else:
+                        print("Nodes already available skipping EKS provisioning")
+                        self._prepare_training_job_yaml(nodes_required)
+                        output = subprocess.check_output(f"kubectl apply -f {self._out_yaml}", shell=True)
+                        print("Applied new configuration to scale training job...")
                 else:
                     print("No rescale triggered:", trigger_scaling, nodes_required, new_grad_accum_steps)
 
@@ -258,11 +269,11 @@ class Sc4l3rDaemon(Daemon):
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.182.91",
-            min_nodes=1,
-            max_nodes=8,
+            etcd_addr="10.100.98.238",
+            min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
+            max_nodes=16,
             gpus_per_node=4,
-            poll_interval=30)
+            poll_interval=120) # seconds - deliberately kept large to account for container load time
 
 
     def run(self):
