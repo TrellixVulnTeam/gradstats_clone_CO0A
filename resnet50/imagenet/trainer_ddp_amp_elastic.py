@@ -101,6 +101,15 @@ def get_world_size():
     return dist.get_world_size()
 
 
+def reduce_tensor(tensor):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= (
+        torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    )
+    return rt
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
     parser.add_argument('data', metavar='DIR', help='path to dataset')
@@ -313,7 +322,7 @@ def parse_arguments():
         args.gradient_accumulation_steps = grad_accum_steps
     except Exception as e:
         print(e)
-        print('Cannot find any recommendation from autoscaler service, continuing as before')
+        print('Cannot find any recommendation from autoscaler service, continuing as before- current world size:', get_world_size())
      
     return args
 
@@ -338,7 +347,7 @@ def setup_training(args):
     args.distributed = True
 
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-    dist.init_process_group(backend='nccl', init_method='env://', timeout=timedelta(seconds=60))
+    dist.init_process_group(backend='nccl', init_method='env://', timeout=timedelta(seconds=600))
     args.rank = int(os.environ["RANK"])
 
     ########## AUTOSCALER SETUP ##########
@@ -621,7 +630,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
         curr_epoch_step += 1
        
         ###### DEBUG ########
-        # scale_one_steps_per_epoch = 1000
+        # scale_one_steps_per_epoch = 100
         #####################
         # data scheme is sampling with replacement, scale_one_steps should be invariant for all scales
         if i >= scale_one_steps_per_epoch:
@@ -728,6 +737,12 @@ def validate(val_loader, model, criterion, writer, epoch, args):
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        # print(type(acc1), type(acc5[0]), acc1)
+        # average across world size
+        acc1 = reduce_tensor(acc1)
+        acc5 = reduce_tensor(acc5)
+        loss = reduce_tensor(loss)
+
         losses.update(loss.item(), images.size(0))
         top1.update(acc1[0], images.size(0))
         top5.update(acc5[0], images.size(0))
@@ -739,7 +754,6 @@ def validate(val_loader, model, criterion, writer, epoch, args):
         if i % args.print_freq == 0:
             progress.display(i)
         images, target = prefetcher.next()
-    # FIXME: REPORT average OVER ALL WORKERS
 
     # tensorboard update
     writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
