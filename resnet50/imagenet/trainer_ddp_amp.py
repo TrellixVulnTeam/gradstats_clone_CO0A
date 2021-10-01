@@ -21,6 +21,7 @@ from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
 import math
 from automl.autoscaler import AdaScale
+from automo.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
 from utils import upload_dir, make_path_if_not_exists
 
@@ -327,7 +328,14 @@ def main_worker(args):
     criterion = nn.CrossEntropyLoss().cuda()
 
     if args.optimizer == "AdamW":
-        optimizer = torch.optim.AdamW(model.parameters(),
+        if args.enable_autoscaler:
+            optimizer = AdamW(model.parameters(),
+                                args.lr,
+                                eps=args.eps,
+                                betas=(args.beta1, args.beta2),
+                                weight_decay=args.weight_decay)
+        else:
+            optimizer = torch.optim.AdamW(model.parameters(),
                                 args.lr,
                                 eps=args.eps,
                                 betas=(args.beta1, args.beta2),
