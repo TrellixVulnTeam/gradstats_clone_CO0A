@@ -77,10 +77,8 @@ class AdaScale(Optimizer):
         self._is_adaptive = self.cfg.is_adaptive
         self._precondition_gradients = self.cfg.precondition_gradients
         self._use_pt_adam = self.cfg.use_pt_adam
-        self._hook_handles: List[Any] = []
-
-        # disable hook because we register hooks through DDP comm hook instead
-        # self._hook()
+        # register DDP comm hook
+        self._model.register_comm_hook(self, self._backward_comm_hook)
 
         # general setup of variables internal to AdaScale functioning
         self._setup()
@@ -134,50 +132,20 @@ class AdaScale(Optimizer):
         self._SAFE_UPDATE_RATIO = 10.0
         self._MIN_STEPS = 50
 
-    def _hook(self) -> None:
-        """ Internal function to register the gradient hooks.
-
-            Note, don't assume every parameter will generate a gradient (i.e. triggering the hook)
-            in every backward pass, which is the reason that we have ``find_unused_params`` flag
-            in the DDP class in ``torch.nn.parallel``.
-        """
-        assert self._hook_handles == [], "Must run unhook first"
-        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
-            for param in param_group["params"]:
-                h = param.register_hook(functools.partial(self._backward_hook, pg_idx, param))
-                self._hook_handles.append(h)
-
-    def __del__(self) -> None:
-        """ Unhook in case caller forgets to call unhook.
-            This however may not "work" since there would be circular reference
-            between the hook objects and this objects. In that case, neither will
-            get GC'ed. Calling unhook explicitly if you really want to delete
-            AdaScale from memory.
-        """
-        self.unhook()
-
-    def unhook(self) -> None:
-        """ Unregister hook handles.
-            This is public because caller may need to call this to ensure all GPU
-            memory are released. Otherwise, the hook may prevent parameters from being
-            released from the GPU memory pool.
-
-            Internally, we use this to support ``add_param_group()`` API.
-        """
-        for h in self._hook_handles:
-            h.remove()
-        self._hook_handles = []
-
     @property
-    def temperature(self) -> float:
-        return self._temperature
+    def smoothing(self) -> float:
+        """
+        The smoothing constant used in exponentially-weighted moving average
+        tracking the gradient norm mean and variance within AdaScale.
 
-    @property
-    def _state(self) -> Dict[str, np.ndarray]:
+        This is exposed API since the value is computed and caller may
+        want to obtain this value and log it.
+
+        Returns:
+            (float):
+                The current smoothing value.
         """
-        Return the state of AdaScale.
-        """
-        return self._optimizer.state["adascale"]
+        return self._smoothing
 
     @property
     def scale(self) -> float:
@@ -195,21 +163,6 @@ class AdaScale(Optimizer):
                 The current scaling factor.
         """
         return self._scale
-
-    @property
-    def smoothing(self) -> float:
-        """
-        The smoothing constant used in exponentially-weighted moving average
-        tracking the gradient norm mean and variance within AdaScale.
-
-        This is exposed API since the value is computed and caller may
-        want to obtain this value and log it.
-
-        Returns:
-            (float):
-                The current smoothing value.
-        """
-        return self._smoothing
 
     def set_scale(self, scale: float, update_estimate: bool = True) -> None:
         """
@@ -234,8 +187,188 @@ class AdaScale(Optimizer):
             self._adascale_state["grad_var_avg"] *= self._scale / scale
         self._scale = scale
 
-    def set_current_batch_size(self, bs: int) -> None:
-        self._current_batch_size = bs
+    def div_by_group_size(self, fut):
+        # This callback method should be invoked after the backward pass.
+        work = None
+        np_local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
+        
+        # check for large outliers - don't apply to moving averages if "very" large
+        found_outlier = False
+        if self.local_grad_sqr is None:
+            self.local_grad_sqr = np_local_grad_sqr
+        
+        if self._real_iterations > self._MIN_STEPS and self.local_grad_sqr > 0.0 and \
+                (np_local_grad_sqr/self.local_grad_sqr) > self._SAFE_UPDATE_RATIO:
+            found_outlier = True
+
+        self.local_grad_sqr = np_local_grad_sqr
+        if self._world_size > 1:
+            work = dist.all_reduce(self._local_grad_sqr, async_op=True)
+        
+        total_grad_sqr = self._total_grad_sqr()
+        # Divide by (_num_grads_to_accum ** 2) to account for gradient
+        # accumulation. Note that sometimes this factor is already taken care of in
+        # loss calculation, so we do not need to adjust for accumulation divisor
+        if self._num_grads_to_accum > 1 and self._adjust_grads_for_accumulation:
+            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
+
+        total_grad_sqr = total_grad_sqr.cpu().numpy()
+
+        # Wait for all_reduce to be done and move it to cpu & np.
+        if work:
+            work.wait()
+        local_grad_sqr = self._local_grad_sqr.cpu().numpy()
+
+        # save as object variable only for Tensorboard logging
+        self.total_grad_sqr = total_grad_sqr
+
+        # adjusting stats for original formula
+        # the reasoning for this adjustment is as follows: if we adjusted the accumulation factor as 
+        # a predivision (in loss calc - as in our BERT codebase) then we are scaling each "local" grad
+        # vector by the accum factor, which we do not want - the accum factor should only affect the
+        # all reduced (large batch gradient.)
+        if not self._adjust_grads_for_accumulation:
+            local_grad_sqr = local_grad_sqr * (self._num_grads_to_accum**2)
+
+        S = self._scale
+
+        cN = self._num_grad_samples
+        # when S = cN the formulation reduces to that in paper
+        # grad_var  = (1/B_small - 1/B_large)(sum(local_grad_sqr)/cN - total_grad_sqr)
+        # For cases where small scale (S=1) itself is DDP or accumulated gradients on single GPU
+        # We have B_small = B_scale1 * S/CN where B_scale1 is total batch size for S=1
+        # Thus deriving further we get grad_var = B_small * (S/(cN-1))(sum(local_grad_sqr)/cN - total_grad_sqr)
+        # note that we do not use this value directly, we take expectation over iterations
+        # Also we adjust for B_small in gns calculation - the value tracked is along lines of
+        # AdaScale gain calculation
+        
+        if S > 1:
+            grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
+            # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
+            grad_sqr = total_grad_sqr - grad_var / S
+        else:
+            # THIS MAY NOT BE CORRECT - TODO: derive else raise NotSupportedException for S=1
+            grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
+            grad_sqr = total_grad_sqr - grad_var / cN
+        
+        # Bounding these values artificially is not good
+        # affects moving averages which in turn lingers on depending on smoothing
+        # also good bounding value for variance is problem dependent, so we skip
+        # updating averages when variance value is not stable
+        #grad_var = np.maximum(grad_var, 1e-6)
+        grad_sqr = np.maximum(grad_sqr, 0.0)
+
+        # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
+        self._nonsmooth_var = grad_var
+        self._nonsmooth_sqr = grad_sqr
+
+        self._gain_invalid[0] = 0
+
+        if found_outlier or \
+                np.any( grad_var <= 0.) or \
+                np.any( grad_sqr < 0.) or \
+                np.isnan(np.sum(grad_sqr)) or \
+                np.isinf(np.sum(grad_sqr)) or \
+                np.isnan(np.sum(local_grad_sqr)) or \
+                np.isinf(np.sum(local_grad_sqr)):
+            if self._enable_debug:
+                print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
+                print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
+            self._gain_invalid[0] = 1
+
+        # an extra boolean sync here for checking if any of the worker stats blew up and skip update
+        if self._world_size > 1:
+            dist.all_reduce(self._gain_invalid)
+
+        if self._gain_invalid[0] == 0:
+            self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
+            self._update_avg("grad_var_avg", grad_var, self.smoothing)
+
+        # Indicating backward is done.
+        self._local_grad_sqr = None
+
+        group_to_use = dist.group.WORLD
+        res = [fut.value()[0].div_(group_to_use.size())]
+        return res
+
+    def _backward_comm_hook(self, state, bucket: dist.GradBucket
+        ) -> torch.futures.Future:
+        grad = bucket.get_tensor()
+
+        if state._local_grad_sqr is None:
+            state._local_grad_sqr = torch.zeros(len(self._optimizer.param_groups),
+                                        device=grad.device,
+                                        requires_grad=False,
+                                        dtype=torch.float64)
+            state._loss_scale_squared = self._current_loss_scale()**2
+
+        # we want accum copies of local_grad_sqr per worker 
+        self._local_grad_sqr[0] += self._get_norm_squared(grad)
+
+        fut = dist.all_reduce(grad, async_op=True).get_future()
+
+        return fut.then(self.div_by_group_size)
+
+    
+    def _current_loss_scale(self):
+        return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
+
+    def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
+            # This function computes and stores the moving average of a vector
+            # using a smoothing factor.
+            biased = self._adascale_state.get(name + "_biased", np.zeros(1))
+            unbias = self._adascale_state.get(name + "_unbias", np.zeros(1))
+            biased = factor * biased + (1.0 - factor) * value
+            unbias = factor * unbias + (1.0 - factor)
+            self._adascale_state[name + "_biased"] = biased
+            self._adascale_state[name + "_unbias"] = unbias
+            self._adascale_state[name] = biased / unbias
+
+    
+    
+    def _calculate_preconditioner(self, pg_idx, param):
+        """
+        From openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
+        components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
+        in case of ADAM - note that averages won't be very useful until we have done 1/(1-beta2) batches, so we
+        ignore batch size predictions initially
+        Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
+        TODO: Investigate other preconditioners
+        FIXME: This is call is expensive - optimize this for step time
+        """
+        if self._real_iterations < self._MIN_STEPS or \
+                not self._precondition_gradients or \
+                param not in self._optimizer.state:
+            return torch.ones_like(param, memory_format=torch.preserve_format)
+        # get current state for param
+        state = self._optimizer.state[param]
+        pinv = state['denom'] #TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam
+        return pinv
+
+    def _get_norm_squared(self, grad):
+        grad = grad.detach().clone()
+        # unscale grads before computing squares - else numbers blow up with scale
+        # curr_loss_scale_squared = torch.tensor(self._current_loss_scale()**2, dtype=torch.float32, device=grad.device, requires_grad=False) # self._current_loss_scale()**2
+        divisor = self._loss_scale_squared
+        if not self._precondition_gradients:
+            preconditioner = self._calculate_preconditioner(pg_idx, param)
+            divisor.mul_(preconditioner)
+        grad.div_(divisor)
+        return grad.pow(2).sum()
+    
+    
+    def _total_grad_sqr(self):
+        # colocate total sqr with local sqr tensor
+        total_grad_sqr = torch.zeros_like(self._local_grad_sqr)
+        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+            for param in param_group["params"]:
+                # exclude missing or NaN values in gradients
+                if param.grad is None or torch.any(torch.isnan(param.grad)):
+                    continue
+                total_grad_sqr[pg_idx] += self._get_norm_squared(param.grad)
+        return total_grad_sqr
+
+
 
     def _grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -272,7 +405,6 @@ class AdaScale(Optimizer):
             return self._adascale_state["grad_var_avg"][pg_idx]
         else:
             return float(np.sum(self._adascale_state["grad_var_avg"]))
-
     def scale_invariant_steps(self, pg_idx: Optional[int] = None) -> float:
         """
         This is the number of steps we advance scheduler by per optimizer step.
@@ -326,248 +458,6 @@ class AdaScale(Optimizer):
         gain = (var + sqr) / (var / max_scale + sqr)
         self._gain = gain
         return gain
-
-    def gns(self, pg_idx: Optional[int] = None) -> float:
-        """
-        Computes GNS as B_simple defined in https://arxiv.org/pdf/1812.06162.pdf
-
-        AdaScale calculations already take into account computing trace(cov)/batch_size estimate and squared
-        of gradient norm.
-
-        We can estimate b_simple = grad_var * batch_size / grad_sqr
-        NOTE: that batch size used here is batch size that corresponds to scale 1.0
-        Temperature of training is measuring ratio of current lr and current batch size - this is
-        expected to be constant during the measurement, e.g. if we decay lr by a factor of 10 while
-        keeping batch size constant then we adjust predicted GNS to decay by factor of 10.
-        """
-        # TODO: compare numbers with original estimator in the paper
-        if self._real_iterations < self._MIN_STEPS:
-            # allow averages to stabilize before predicting
-            self._gns = self._scale_one_batch_size
-            self._update_avg("gns_avg", np.array([self._gns]), 0.9)
-            return self._gns
-        if self._gain_invalid[0] != 0:
-            # fall back to moving average
-            self._gns = self._adascale_state["gns_avg"]
-            return self._gns
-        var = self._grad_var_avg(pg_idx)
-        sqr = self._grad_sqr_avg(pg_idx)
-        if self._enable_debug:
-            print("IN GNS (sqr, var):", sqr, var)
-        gns = self._scale_one_batch_size * var / sqr
-        # clip GNS for upper limit
-        self._gns = min(gns, self._batch_size_upper_limit)
-        # self._gns = gns * self.temperature
-        self._update_avg("gns_avg", np.array([self._gns]), 0.9)
-        return self._adascale_state["gns_avg"]
-
-    def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
-            # This function computes and stores the moving average of a vector
-            # using a smoothing factor.
-            biased = self._adascale_state.get(name + "_biased", np.zeros(value.shape[0]))
-            unbias = self._adascale_state.get(name + "_unbias", np.zeros(value.shape[0]))
-            biased = factor * biased + (1.0 - factor) * value
-            unbias = factor * unbias + (1.0 - factor)
-            self._adascale_state[name + "_biased"] = biased
-            self._adascale_state[name + "_unbias"] = unbias
-            self._adascale_state[name] = biased / unbias
-
-    def _current_loss_scale(self):
-        return self._scaler.get_scale() if self._scaler else amp.state_dict()['loss_scaler0']['loss_scale']
-
-
-    @torch.no_grad()
-    def _get_norm_squared(self, pg_idx, param, grad):
-        grad = grad.detach().clone()
-        # unscale grads before computing squares - else numbers blow up with scale
-        divisor = self._loss_scale_squared
-        if not self._precondition_gradients:
-            preconditioner = self._calculate_preconditioner(pg_idx, param)
-            divisor.mul_(preconditioner)
-        grad.div_(divisor)
-        return grad.pow(2).sum()
-
-
-    def _total_grad_sqr(self):
-        # colocate total sqr with local sqr tensor
-        total_grad_sqr = torch.zeros_like(self._local_grad_sqr)
-
-        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
-            for param in param_group["params"]:
-                # exclude missing or NaN values in gradients
-                if param.grad is None or torch.any(torch.isnan(param.grad)):
-                    continue
-                total_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, param.grad)
-        return total_grad_sqr
-
-    @torch.no_grad()
-    def _backward_hook(self, pg_idx: int, param: torch.Tensor, grad: torch.Tensor) -> None:
-        # This method should be invoked once for each parameter during the
-        # backward pass, before gradients are synchronized between world_size.
-
-
-        # Store the local gradient square sums in a tensor colocated with grad
-        # This vector is also used for error checking. Whenever it is not None,
-        # it means that we are in backward pass.
-        if self._local_grad_sqr is None:
-            self._local_grad_sqr = torch.zeros(len(self._optimizer.param_groups),
-                                                device=grad.device,
-                                                requires_grad=False,
-                                                dtype=torch.float64)
-            # curr_loss_scale_squared = torch.tensor(self._current_loss_scale()**2, dtype=torch.float32, device=grad.device, requires_grad=False) 
-            self._loss_scale_squared = self._current_loss_scale()**2
-
-        # we want accum copies of local_grad_sqr per worker 
-        self._local_grad_sqr[pg_idx] += self._get_norm_squared(pg_idx, param, grad)
-        # Now, ensure we queue a callback at the end of the callback queue.
-        # This will fire after all gradient callbacks are done (esp. those
-        # queued by DDP.
-        self._final_callback_queued = False
-        Variable._execution_engine.queue_callback(self._queue_callback)
-
-
-    def _queue_callback(self) -> None:
-        # This method should be invoked after the entire backward pass. We want
-        # to make sure self._final_callback is invoked once, only after all
-        # gradients have been synchronized between each worker. However, the
-        # synchronization code in DistributedDataParallel is also done in a
-        # callback, which might not yet be executed. Therefore, we enqueue
-        # self._final_callback from this method, which should ensure it is
-        # invoked after the gradient synchronization callback.
-        if self._final_callback_queued:
-            return
-        self._final_callback_queued = True
-        Variable._execution_engine.queue_callback(self._final_callback)
-
-    @torch.no_grad()
-    def _final_callback(self) -> None:
-        # This method should be invoked once for each backward pass, after
-        # gradients have been synchronized between each worker, unless we
-        # are in gradient accumulation mode, where grads are not all_reduced
-        # between the GPUs.
-        self._final_callback_queued = False
-        assert isinstance(self._local_grad_sqr, torch.Tensor)
-        # Keep track of number of backward calls for gradient accumulation.
-        self._num_backward_calls += 1
-        assert (self._num_backward_calls - self._last_final_backward_call) <= self._num_grads_to_accum,\
-            (f"bug: {self._num_backward_calls} - {self._last_final_backward_call} should <= {self._num_grads_to_accum}")
-        if (self._num_backward_calls - self._last_final_backward_call) % self._num_grads_to_accum != 0:
-            assert self._local_grad_sqr is not None, "We should still be in backward phase"
-            return
-
-        # This vector has length of # of param_groups
-        work = None
-        # we store the squared norm at local level before allreduce
-        np_local_grad_sqr = self._local_grad_sqr.clone().cpu().numpy()
- 
-        # check for large outliers - don't apply to moving averages if "very" large
-        found_outlier = False
-        if self.local_grad_sqr is None:
-            self.local_grad_sqr = np_local_grad_sqr
-
-        if self._enable_debug:
-            print("rank={}, latest={}, previous={}".format(self._rank, np_local_grad_sqr, self.local_grad_sqr))
-
-        if self._real_iterations > self._MIN_STEPS and self.local_grad_sqr[0] > 0.0 and \
-                (np_local_grad_sqr[0]/self.local_grad_sqr[0]) > self._SAFE_UPDATE_RATIO:
-            found_outlier = True
-            if self._enable_debug:
-                print("OUTLIER detected ratio={}, skipping optimizer state update".format(np_local_grad_sqr[0]/self.local_grad_sqr[0]))
-
-        self.local_grad_sqr = np_local_grad_sqr
-
-        if self._world_size > 1:
-            work = dist.all_reduce(self._local_grad_sqr, async_op=True)
-        
-        total_grad_sqr = self._total_grad_sqr()
-        # Divide by (_num_grads_to_accum ** 2) to account for gradient
-        # accumulation. Note that sometimes this factor is already taken care of in
-        # loss calculation, so we do not need to adjust for accumulation divisor
-        if self._num_grads_to_accum > 1 and self._adjust_grads_for_accumulation:
-            total_grad_sqr = total_grad_sqr / (self._num_grads_to_accum ** 2)
-
-        total_grad_sqr = total_grad_sqr.cpu().numpy()
-        # Wait for all_reduce to be done and move it to cpu & np.
-        if work:
-            work.wait()
-        local_grad_sqr = self._local_grad_sqr.cpu().numpy()
-
-        # save as object variable only for Tensorboard logging
-        self.total_grad_sqr = total_grad_sqr
- 
-        # adjusting stats for original formula
-        # the reasoning for this adjustment is as follows: if we adjusted the accumulation factor as 
-        # a predivision (in loss calc - as in our BERT codebase) then we are scaling each "local" grad
-        # vector by the accum factor, which we do not want - the accum factor should only affect the
-        # all reduced (large batch gradient.)
-        if not self._adjust_grads_for_accumulation:
-            local_grad_sqr = local_grad_sqr * (self._num_grads_to_accum**2)
-
-        S = self._scale
-
-        # TODO: write tests to check this (verify accumulation mechanism interaction with DDP hook)
-        # When accumulating gradients we have `accum_steps` number of gradients per worker
-        # which is further summed to get `local_grad_sqr` - total of `accum_steps`*`num_workers`
-        # gradients sample size is `accum_steps`*`num_workers`
-        # `total_grad_sqr` is squared l2-norm of allreduced gradient
-
-        cN = self._num_grad_samples
-        # when S = cN the formulation reduces to that in paper
-        # grad_var  = (1/B_small - 1/B_large)(sum(local_grad_sqr)/cN - total_grad_sqr)
-        # For cases where small scale (S=1) itself is DDP or accumulated gradients on single GPU
-        # We have B_small = B_scale1 * S/CN where B_scale1 is total batch size for S=1
-        # Thus deriving further we get grad_var = B_small * (S/(cN-1))(sum(local_grad_sqr)/cN - total_grad_sqr)
-        # note that we do not use this value directly, we take expectation over iterations
-        # Also we adjust for B_small in gns calculation - the value tracked is along lines of
-        # AdaScale gain calculation
-                
-        if S > 1:
-            grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
-            # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
-            grad_sqr = total_grad_sqr - grad_var / S
-        else:
-            # for S=1
-            grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
-            grad_sqr = total_grad_sqr - grad_var / cN
-
-        # Bounding these values artificially is not good
-        # affects moving averages which in turn lingers on depending on smoothing
-        # also good bounding value for variance is problem dependent, so we skip
-        # updating averages when variance value is not stable
-        #grad_var = np.maximum(grad_var, 1e-6)
-        grad_sqr = np.maximum(grad_sqr, 0.0)
-
-        # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
-        self._nonsmooth_var = grad_var
-        self._nonsmooth_sqr = grad_sqr
-
-        self._gain_invalid[0] = 0
-
-        if found_outlier or \
-                np.any( grad_var <= 0.) or \
-                np.any( grad_sqr < 0.) or \
-                np.isnan(np.sum(grad_sqr)) or \
-                np.isinf(np.sum(grad_sqr)) or \
-                np.isnan(np.sum(local_grad_sqr)) or \
-                np.isinf(np.sum(local_grad_sqr)):
-            if self._enable_debug:
-                print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
-                print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
-            self._gain_invalid[0] = 1
-
-        # an extra boolean sync here for checking if any of the worker stats blew up and skip update
-        if self._world_size > 1:
-            dist.all_reduce(self._gain_invalid)
-
-        if self._gain_invalid[0] == 0:
-            self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
-            self._update_avg("grad_var_avg", grad_var, self.smoothing)
-
-        # reset backward call counters for next param update cycle
-        self._last_final_backward_call = self._num_backward_calls = 0
-        # Indicating backward is done.
-        self._local_grad_sqr = None
-
 
     def get_step_increment(self):
         """
@@ -637,84 +527,6 @@ class AdaScale(Optimizer):
         # FIXME: AMP O2 seems to create a copy of param group dicts, so the proxy setup in c-tor breaks, force resync here so that scheduler works properly
         self.param_groups = self._optimizer.param_groups
         return res
-
-
-    def add_param_group(self, pg: Dict) -> None:
-        """ Support adding parameter groups
-
-            We need to re-size some of the state and re-register the backward hooks.
-        """
-        assert self._local_grad_sqr is None, "Can't add parameter group during backward"
-        self._optimizer.add_param_group(pg)
-        # Update the hooks.
-        self.unhook()
-        self._hook()
-        # Extend the states.
-        for name in self._adascale_state.keys():
-            assert name.startswith("grad_sqr_avg") or name.startswith("grad_var_avg"), name
-            if name.endswith("_count"):
-                # This is the "_count" variable, should be a 1D int.
-                assert self._adascale_state[name].shape == (1,), self._adascale_state[name].shape
-                continue
-            # must be a np array, extend it with the right value and check the shape.
-            val = 1 if name == "grad_sqr_avg" else 0
-            self._adascale_state[name] = np.append(self._adascale_state[name], val)
-            assert self._adascale_state[name].shape == (len(self._optimizer.param_groups),)
-
-
-    def zero_grad(self) -> None:
-        """Proxy function to optimizer, because some training loops need this."""
-        assert self._local_grad_sqr is None, "Don't zero_grad in backward"
-        return self._optimizer.zero_grad()
-
-
-    def state_dict(self) -> Dict:
-        """ Proxy function to optimizer, checkpointing needs this.
-
-            .. note::
-
-                Do NOT checkpoint in the middle of gradient accumulation since
-                associated AdaScale internal states are not saved in the checkpoint.
-        """
-        assert self._local_grad_sqr is None, "Don't checkpoint in backward"
-        return self._optimizer.state_dict()
-
-
-    def load_state_dict(self, data: Dict) -> None:
-        """ Proxy function to optimizer, checkpointing needs this.
-
-            .. note::
-
-                Do NOT checkpoint in the middle of gradient accumulation since
-                associated AdaScale internal states are not saved in the checkpoint.
-        """
-        assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
-        # SHOULD LOAD ADASCALE STATE HERE
-        self._adascale_state = data['state']['adascale']
-        if self._enable_debug:
-            print("IN AUTOSCALER RESTORED SI", self._adascale_state['scale_invariant_steps'])
-        return self._optimizer.load_state_dict(data)
-
-
-    def _calculate_preconditioner(self, pg_idx, param):
-        """
-        From openai paper - One might also use preconditioned gradients, obtained for example by dividing gradient 
-        components by the squareroot of the Adam optimizer’s [KB14] accumulated variances.
-        in case of ADAM - note that averages won't be very useful until we have done 1/(1-beta2) batches, so we
-        ignore batch size predictions initially
-        Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
-        TODO: Investigate other preconditioners
-        TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam.
-        Older FusedAdam support (slower for getting preconditiner) is available in previous commits.
-        """
-        if self._real_iterations < self._MIN_STEPS or \
-                not self._precondition_gradients or \
-                param not in self._optimizer.state:
-            return torch.ones_like(param, memory_format=torch.preserve_format)
-        # get current state for param
-        state = self._optimizer.state[param]
-        pinv = state['denom']
-        return pinv
 
 
     def log_to_tensorboard(self, real_iteration):

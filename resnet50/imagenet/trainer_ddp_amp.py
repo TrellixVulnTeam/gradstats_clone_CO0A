@@ -31,29 +31,6 @@ model_names = sorted(name for name in models.__dict__
 
 best_acc1 = 0
 
-# 1231231
-def _allreduce_fut(process_group: dist.ProcessGroup, tensor: torch.Tensor
-    ) -> torch.futures.Future:
-    group_to_use = process_group if process_group is not None else dist.group.WORLD
-
-    "Averages the input gradient tensor by allreduce and returns a future."
-    # we can access grad tensor before allreduce 
-    # e.g. print(tensor)
-    fut = dist.all_reduce(tensor, group=group_to_use, async_op=True).get_future()
-    if fut:
-        fut.wait()
-    # we can access grad tensor before allreduce 
-    # e.g. print(tensor)
-    def div_by_group_size(fut):
-        return [fut.value()[0].div_(group_to_use.size())]
-
-    return fut.then(div_by_group_size)
-
-def _backward_comm_hook(state: AdaScale, bucket: dist.GradBucket
-    ) -> torch.futures.Future:
-    # We can modify state (optimizer) here
-    return _allreduce_fut(None, bucket.get_tensor())
-
 def get_rank():
     if not dist.is_available():
         return 0
@@ -371,10 +348,6 @@ def main_worker(args):
             model=model,
             scaler=scaler,
             summary_writer=writer)
-
-        # register DDP comm hook
-        # pass optimizer (AdaScale object) into it for scaling functionality
-        model.register_comm_hook(optimizer, _backward_comm_hook)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -697,8 +670,8 @@ def validate(val_loader, model, criterion, writer, epoch, args):
     writer.add_scalar('Test/Accuracy_top1', top1.avg, epoch)
     writer.add_scalar('Test/Accuracy_top5', top5.avg, epoch)
     writer.flush()
-    upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
-               f'{args.arch}/{args.label}')
+    # upload_dir(f'{args.log_dir}/{args.label}', args.bucket,
+    #            f'{args.arch}/{args.label}')
 
     # TODO: this should also be done with the ProgressMeter
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'.format(top1=top1,
