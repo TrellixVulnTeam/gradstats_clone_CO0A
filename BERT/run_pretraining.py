@@ -45,7 +45,7 @@ from utils import is_main_process, format_step, get_world_size, get_rank, upload
 from torch.nn.parallel import DistributedDataParallel as DDP
 from schedulers import LinearWarmUpScheduler
 
-from automl.autoscaler import AdaScale
+#from automl.autoscaler import AdaScale
 from torch.utils.tensorboard import SummaryWriter
 import dllogger
 from concurrent.futures import ProcessPoolExecutor
