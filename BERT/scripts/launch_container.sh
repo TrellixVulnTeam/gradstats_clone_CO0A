@@ -13,12 +13,14 @@ IMAGE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/pytorch-training:${TAG}"
 
 
 docker run --runtime=nvidia --gpus 8  \
-   --privileged \
-   --rm -d   \
-   --name $CONTAINER_NAME \
+   	--privileged \
+   	--rm -d   \
+  	--net=host --uts=host --ipc=host \
+  	--ulimit stack=67108864 --ulimit memlock=-1  --security-opt seccomp=unconfined \
+   	--name $CONTAINER_NAME \
 	${CODE_MOUNT} \
-	    ${IMAGE} \
-   bash -c  '"sleep infinity"'
+	${IMAGE} \
+   	bash -c  '"sleep infinity"'
 
 
 docker exec -it ${CONTAINER_NAME} bash -c "pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger" 
