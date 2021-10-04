@@ -7,7 +7,7 @@ aws ecr get-login-password --region ${REGION} | docker login --username AWS --pa
 
 CONTAINER_NAME=bert
 CODE_MOUNT="-v /fsx/:/fsx"
-SSH_MOUNT="-v /fsx/ssh_container/:/.ssh"
+SSH_MOUNT="-v /fsx/ssh_container/:/root/.ssh"
 
 IMAGE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/pytorch-training:${TAG}"
 #763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:
