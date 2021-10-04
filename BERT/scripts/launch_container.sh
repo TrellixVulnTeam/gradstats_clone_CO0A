@@ -7,6 +7,7 @@ aws ecr get-login-password --region ${REGION} | docker login --username AWS --pa
 
 CONTAINER_NAME=bert
 CODE_MOUNT="-v /fsx/:/fsx"
+SSH_MOUNT="-v /fsx/ssh_container/:/.ssh"
 
 IMAGE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/pytorch-training:${TAG}"
 #763104351884.dkr.ecr.us-east-1.amazonaws.com/pytorch-training:
@@ -19,9 +20,12 @@ docker run --runtime=nvidia --gpus 8  \
   	--ulimit stack=67108864 --ulimit memlock=-1  --security-opt seccomp=unconfined \
    	--name $CONTAINER_NAME \
 	${CODE_MOUNT} \
+	${SSH_MOUNT} \
 	${IMAGE} \
    	bash -c  '"sleep infinity"'
 
 
 docker exec -it ${CONTAINER_NAME} bash -c "pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger" 
 docker exec -it ${CONTAINER_NAME} bash -c  "pip install tqdm tensorboard yacs"
+
+
