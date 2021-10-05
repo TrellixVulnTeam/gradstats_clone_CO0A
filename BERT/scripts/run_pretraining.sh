@@ -15,7 +15,7 @@
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
-#source /fsx/conda/bin/activate /fsx/conda/envs/bert/
+source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python
 
 train_batch_size=${1:-1024}
 learning_rate=${2:-"6e-3"}
@@ -142,7 +142,7 @@ export NCCL_DEBUG=INFO
 
 
 #CMD="/shared/conda/envs/adascale_bert/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
-CMD=" python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+CMD=" /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
 
 
 
@@ -221,7 +221,7 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 
 # CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
 
-CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
 #CMD="/fsx/conda/envs/bert/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 
