@@ -15,7 +15,7 @@
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
-source /shared/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
+source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
 
 train_batch_size=${1:-2048}
 learning_rate=${2:-"1.3653e-3"}
