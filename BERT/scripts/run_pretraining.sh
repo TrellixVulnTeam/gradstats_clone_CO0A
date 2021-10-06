@@ -142,7 +142,7 @@ export NCCL_DEBUG=INFO
 
 
 #CMD="/shared/conda/envs/adascale_bert/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
-CMD=" /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+CMD=" run_pretraining.sh -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
 
 
 

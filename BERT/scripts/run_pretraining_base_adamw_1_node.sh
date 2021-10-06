@@ -15,7 +15,7 @@
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
-source /shared/conda/bin/activate /shared/conda/envs/adascale_bert/
+source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
 
 train_batch_size=${1:-8192}
 learning_rate=${2:-"1.3653e-3"}
@@ -46,11 +46,11 @@ warmup_proportion_phase2=${18:-"0.25"}
 train_steps_phase2=${19:-1563}
 gradient_accumulation_steps_phase2=${20:-1024}
 DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
-DATA_DIR_PHASE1=/shared/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
-BERT_CONFIG=/shared/scaling_without_tuning/BERT/bert_base_config.json
+DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
+BERT_CONFIG=/fsx/code/gradstats/BERT/bert_base_config.json
 DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
-DATA_DIR_PHASE2=/shared/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
-CODEDIR=${23:-"/shared/scaling_without_tuning/BERT/"}
+DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
+CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
 RESULTS_DIR=$CODEDIR/results/pretrain_base_adamw_1node_gns
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
@@ -157,7 +157,7 @@ export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
  
  
-CMD="/shared/conda/envs/adascale_bert/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 
 if [ "$create_logfile" = "true" ] ; then
@@ -245,7 +245,7 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 
 # CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
 
-CMD="/shared/conda/envs/adascale_bert/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 if [ "$create_logfile" = "true" ] ; then
   export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
