@@ -85,6 +85,7 @@ class AdaScale(Optimizer):
         self._scale_one_world_size = self.cfg.scale_one_world_size
         # compute scale factor (currently integer)
         self._scale = int(self._num_grad_samples // self._scale_one_world_size)
+        assert self._scale >= 1, "SCALE should be an integer greater than or equal to 1"
         # this is used to track the batch size changes during dynamic training,
         # also used for adjusting temperature for gns predictions
         self._current_batch_size = self._scale_one_batch_size * self._scale # self._num_grad_samples
@@ -104,6 +105,7 @@ class AdaScale(Optimizer):
         self._averaged_gns = 0
         # general setup of variables internal to AdaScale functioning
         self._setup()
+
 
     def _setup(self) -> None:
         self._gain = 1.0
@@ -134,11 +136,10 @@ class AdaScale(Optimizer):
                 "gns_avg": 0.0, 
                 "grad_sqr_avg": np.ones(self._num_param_groups),
                 "grad_var_avg": np.zeros(self._num_param_groups),
+                "scale": self._scale
             },
         )
         
-        adascale_state = self._optimizer.state['adascale']
-
         # TODO: is this required? - maybe can access these hps directly from self._optimizer
         if self._is_adaptive:
             self._opt_param_group = {'beta1': [], 'beta2': [], 'eps': []}
@@ -151,8 +152,9 @@ class AdaScale(Optimizer):
         self.state = self._optimizer.state
         self.local_grad_sqr = None
         # stability related constants for ADAM with AdaScale
-        self._SAFE_UPDATE_RATIO = 10.0
+        self._SAFE_UPDATE_RATIO = 50.0 # 10.0 #TODO: Investigate if gradient clipping obviates this
         self._MIN_STEPS = 50
+
 
     def _hook(self) -> None:
         """ Internal function to register the gradient hooks.
@@ -167,6 +169,7 @@ class AdaScale(Optimizer):
                 h = param.register_hook(functools.partial(self._backward_hook, pg_idx, param))
                 self._hook_handles.append(h)
 
+
     def __del__(self) -> None:
         """ Unhook in case caller forgets to call unhook.
             This however may not "work" since there would be circular reference
@@ -175,6 +178,7 @@ class AdaScale(Optimizer):
             AdaScale from memory.
         """
         self.unhook()
+
 
     def unhook(self) -> None:
         """ Unregister hook handles.
@@ -188,16 +192,19 @@ class AdaScale(Optimizer):
             h.remove()
         self._hook_handles = []
 
+
     @property
     def temperature(self) -> float:
         return self._temperature
+
 
     @property
     def _state(self) -> Dict[str, np.ndarray]:
         """
         Return the state of AdaScale.
         """
-        return self._optimizer.state["adascale"]
+        return self._optimizer.state_dict()['state']['adascale']
+
 
     @property
     def scale(self) -> float:
@@ -216,6 +223,7 @@ class AdaScale(Optimizer):
         """
         return self._scale
 
+
     @property
     def smoothing(self) -> float:
         """
@@ -231,8 +239,10 @@ class AdaScale(Optimizer):
         """
         return self._smoothing
 
+
     def set_scale(self, scale: float, update_estimate: bool = True) -> None:
         """
+        #TODO: DEPRECATE IN NEW API
         Set the scaling factor of the current batch size. It is up to the
         application to invoke this function to make sure that AdaScale's
         scaling factor matches the actual batch size used during training.
@@ -251,12 +261,31 @@ class AdaScale(Optimizer):
             assert self._scale >= 1, "bug: old scale isn't valid"
             # Rescale grad_var_avg to account for the change in scale
             if "grad_var_avg_biased" in adascale_state:
-                adascale_state["grad_var_avg_biased"] *= self._scale / scale
-            adascale_state["grad_var_avg"] *= self._scale / scale
+                prev_scale = adascale_state['scale']
+                curr_scale = self._scale
+                adjust_factor = prev_scale / curr_scale
+                print(f"ADJUSTING VARIANCE AVERAGE FOR SCALE CHANGE FROM {prev_scale} to {curr_scale}")
+                adascale_state['grad_var_avg_biased'] *= adjust_factor
+            adascale_state["grad_var_avg"] *= adjust_factor
         self._scale = scale
+
+
+    def _adjust_variance(self, prev_scale):
+        adascale_state = self._optimizer.state_dict()['state']['adascale']
+        # Rescale grad_var_avg to account for the change in scale
+        if "grad_var_avg_biased" in adascale_state:
+            # prev_scale = adascale_state['scale']
+            curr_scale = self._scale
+            adjust_factor = prev_scale / curr_scale
+            print(f"ADJUSTING VARIANCE AVERAGE FOR SCALE CHANGE FROM {prev_scale} to {curr_scale}")
+            adascale_state['grad_var_avg_biased'] *= adjust_factor
+            adascale_state["grad_var_avg"] *= adjust_factor
+            print("ADJUSTED VARIANCE ESTIMATE")
+
 
     def set_current_batch_size(self, bs: int) -> None:
         self._current_batch_size = bs
+
 
     def _grad_sqr_avg(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -277,6 +306,7 @@ class AdaScale(Optimizer):
         else:
             return float(np.sum(adascale_state["grad_sqr_avg"]))
 
+
     def _grad_var_avg(self, pg_idx: Optional[int] = None) -> float:
         """
         Current estimate of the trace of the covariance of the true gradient
@@ -295,6 +325,7 @@ class AdaScale(Optimizer):
             return adascale_state["grad_var_avg"][pg_idx]
         else:
             return float(np.sum(adascale_state["grad_var_avg"]))
+
 
     def scale_invariant_steps(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -389,16 +420,16 @@ class AdaScale(Optimizer):
 
 
     def _update_avg(self, name: str, value: np.ndarray, factor: float) -> None:
-            # This function computes and stores the moving average of a vector
-            # using a smoothing factor.
-            adascale_state = self._optimizer.state_dict()['state']['adascale']
-            biased = adascale_state.get(name + "_biased", np.zeros(value.shape[0]))
-            unbias = adascale_state.get(name + "_unbias", np.zeros(value.shape[0]))
-            biased = factor * biased + (1.0 - factor) * value
-            unbias = factor * unbias + (1.0 - factor)
-            adascale_state[name + "_biased"] = biased
-            adascale_state[name + "_unbias"] = unbias
-            adascale_state[name] = biased / unbias
+        # This function computes and stores the moving average of a vector
+        # using a smoothing factor.
+        adascale_state = self._optimizer.state_dict()['state']['adascale']
+        biased = adascale_state.get(name + "_biased", np.zeros(value.shape[0]))
+        unbias = adascale_state.get(name + "_unbias", np.zeros(value.shape[0]))
+        biased = factor * biased + (1.0 - factor) * value
+        unbias = factor * unbias + (1.0 - factor)
+        adascale_state[name + "_biased"] = biased
+        adascale_state[name + "_unbias"] = unbias
+        adascale_state[name] = biased / unbias
 
 
     def _current_loss_scale(self):
@@ -608,11 +639,12 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't step without finishing backward phase"
         if self._gain_invalid:
             return 1 # should this be 1 or 0
-        prev_steps = np.floor(adascale_state['scale_invariant_steps'])
+        prev_steps = adascale_state['scale_invariant_steps'] # np.floor(adascale_state['scale_invariant_steps'])
         adascale_state['scale_invariant_steps'] += self.scale_invariant_steps()
-        step_increment = np.floor(adascale_state['scale_invariant_steps']) - prev_steps
+        adascale_state['scale'] = self._scale
+        step_increment = adascale_state['scale_invariant_steps'] - prev_steps # np.floor(adascale_state['scale_invariant_steps'] - prev_steps)
         self._real_iterations += 1
-        return int(step_increment)
+        return min(self._scale, math.ceil(step_increment)) # int(step_increment)
 
 
     def step(self, *args: Any, **kwargs: Any) -> Optional[float]:
@@ -709,8 +741,8 @@ class AdaScale(Optimizer):
                 associated AdaScale internal states are not saved in the checkpoint.
         """
         assert self._local_grad_sqr is None, "Don't checkpoint in backward"
-        if self._enable_debug:
-            print(f"ACCESSING STATE DICT {self._rank} {self._optimizer.state_dict()['state']['adascale']}") 
+        # if self._enable_debug:
+        print(f"ACCESSING STATE DICT {self._rank} {self._optimizer.state_dict()['state']['adascale']}") 
         return self._optimizer.state_dict()
 
 
@@ -726,6 +758,9 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         for k, v in  data['state']['adascale'].items():
             adascale_state[k] = v
+        prev_scale = adascale_state['scale']
+        # adjust for current scale here
+        self._adjust_variance(prev_scale)
 
         if self._enable_debug:
             print(f"{time.time()}-{self._rank}, IN AUTOSCALER RESTORED SI {adascale_state['scale_invariant_steps']}")

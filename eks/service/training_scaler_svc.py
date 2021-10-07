@@ -105,7 +105,7 @@ class ClusterScaler(object):
             body = s3_object['Body']
             text = body.read().decode('utf-8')
             last_line = text.splitlines()[-1]
-            # 1024,4,True,256,1,4830
+            # (3840, 60, True, 256, 1, 5865, 1633599616)
             current_bs,current_num_workers,grad_accum_supported,scale_one_bs,num_grads_accumulated,gns,timestamp = last_line.split(',')
             current_bs = int(current_bs)
             current_num_workers = int(current_num_workers)
@@ -237,7 +237,7 @@ class ClusterScaler(object):
             # check current GNS prediction
             current_cluster_state = self._get_current_cluster_state()
             if current_cluster_state:
-                print(current_cluster_state)
+                print("Current cluster state:", current_cluster_state)
                 trigger_scaling, nodes_required, new_grad_accum_steps = self._get_scaling_recommendation(current_cluster_state)
                 if trigger_scaling:
                     with open(self._nodestate_file, 'w') as f:
@@ -266,11 +266,11 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_6_delme',
+            'r50_elastic_7_delme',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.212.76",
+            etcd_addr="10.100.85.58",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,

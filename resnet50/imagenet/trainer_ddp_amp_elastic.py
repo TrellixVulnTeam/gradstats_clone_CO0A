@@ -708,6 +708,10 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
                 # save checkpoint, flush and push to S3 every 500 iterations FIXME: hardcoded
                 if global_step % 500 == 0:
                     save_checkpoint(state, False, args.checkpoint_file)
+                    if args.enable_autoscaler:
+                        # this fires a GNS info to be logged in S3 scaling service reads this info
+                        # and initiates a resize if needed
+                        optimizer.check_for_cluster_resize()
                     writer.flush()
         images, target = prefetcher.next()
 

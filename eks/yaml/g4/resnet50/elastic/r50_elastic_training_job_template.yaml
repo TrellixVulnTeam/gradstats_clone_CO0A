@@ -1,7 +1,7 @@
 apiVersion: elastic.pytorch.org/v1alpha1
 kind: ElasticJob
 metadata:
-  name: "r50-elastic-6-autoscaler-job"
+  name: "r50-elastic-7-autoscaler-job"
   namespace: elastic-job
 spec:
   # Use "etcd-service:2379" if you already apply etcd.yaml
@@ -47,7 +47,7 @@ spec:
                 - "--enable-autoscaler"
                 - "--epochs=90"
                 - "--channels-last"
-                - "--label=r50_elastic_6_delme"
+                - "--label=r50_elastic_7_delme"
               resources:
                 limits:
                   nvidia.com/gpu: 4

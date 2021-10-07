@@ -1,6 +1,6 @@
 autoscaler:
   model_name: "resnet50"
-  training_label: "r50_elastic_6_delme"
+  training_label: "r50_elastic_7_delme"
   s3_bucket: "mzanur-autoscaler"
   log_dir: "/shared/export/logs"
   enable_debug: Off
