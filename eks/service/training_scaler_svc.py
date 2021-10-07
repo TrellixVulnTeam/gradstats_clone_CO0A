@@ -206,17 +206,18 @@ class ClusterScaler(object):
             trigger_scaling = False #TODO: downscaling cluster not supported initially
         elif nodes_required > self._max_nodes:
             nodes_required = self._max_nodes
-            # check if gradient accumulation is supported
-            if grad_accum_supported:
-                # calculate num grad accum steps (keep per-gpu batch size same)
-                new_bs = desired_scaling_factor * scale_one_bs
-                bs_per_gpu_without_accum = int(current_bs / current_num_workers / num_grads_accumulated)
-                new_bs_per_gpu = int(new_bs / self._max_nodes / self._gpus_per_node)
-                new_grad_accum_steps = new_bs_per_gpu // bs_per_gpu_without_accum
-                if new_grad_accum_steps == num_grads_accumulated:
-                    print("New accumulation steps:", new_grad_accum_steps, "Same as before - no scaling!")
-                    trigger_scaling = False
+            if current_scaling_factor < self._max_nodes:
+                # first fill up nodes that are available
                 trigger_scaling = True
+                new_grad_accum_steps = 1
+            elif grad_accum_supported:
+                if desired_scaling_factor % self._max_nodes != 0:
+                    # we only support accumulation with multiples of per gpu batch size
+                    trigger_scaling = False
+                    new_grad_accum_steps = 1
+                else:
+                    trigger_scaling = True
+                    new_grad_accum_steps = int(desired_scaling_factor/self._max_nodes)
             else:
                 trigger_scaling = False
         else:
@@ -265,15 +266,15 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_1_delme',
+            'r50_elastic_6_delme',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.98.238",
+            etcd_addr="10.100.212.76",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,
-            poll_interval=120) # seconds - deliberately kept large to account for container load time
+            poll_interval=60) # seconds - deliberately kept large to account for container load time
 
 
     def run(self):
