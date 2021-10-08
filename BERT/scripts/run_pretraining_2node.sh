@@ -15,9 +15,9 @@
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
-source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python
-
-train_batch_size=${1:-1024}
+source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
+echo $PATH 
+train_batch_size=${1:-256}
 learning_rate=${2:-"6e-3"}
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
@@ -39,7 +39,8 @@ train_steps_phase2=${19:-1563}
 gradient_accumulation_steps_phase2=${20:-128}
 DATASET=books_wiki_en_corpus #hdf5_lower_case_1_seq_len_128_max_pred_20_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
 DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
-BERT_CONFIG=/fsx/code/DeepLearningExamples/PyTorch/LanguageModeling/BERT/bert_config.json
+#BERT_CONFIG=/fsx/code/DeepLearningExamples/PyTorch/LanguageModeling/BERT/bert_config.json
+BERT_CONFIG=/fsx/code/gradstats/BERT/bert_base_config.json
 DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked_lm_prob_0.15_random_seed_12345_dupe_factor_5/wikicorpus_en # change this for other datasets
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
@@ -141,9 +142,10 @@ export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
 
 
-CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+CMD=" /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 #CMD=" /home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
-
+echo "####################3"
+echo $CMD
 
 
 if [ "$create_logfile" = "true" ] ; then
@@ -155,13 +157,15 @@ if [ "$create_logfile" = "true" ] ; then
 fi
 
 set -x
-if [ -z "$LOGFILE" ] ; then
-   $CMD
-else
-   (
-     $CMD
-   ) |& tee $LOGFILE
-fi
+$CMD
+
+#if [ -z "$LOGFILE" ] ; then
+#   $CMD
+#else
+#   (
+#     $CMD
+#   ) |& tee $LOGFILE
+#fi
 
 set +x
 
@@ -169,79 +173,79 @@ echo "finished pretraining"
 
 #Start Phase2
 
-PREC=""
-if [ "$precision" = "fp16" ] ; then
-   PREC="--fp16"
-elif [ "$precision" = "fp32" ] ; then
-   PREC=""
-elif [ "$precision" = "tf32" ] ; then
-   PREC=""
-else
-   echo "Unknown <precision> argument"
-   exit -2
-fi
-
-ACCUMULATE_GRADIENTS=""
-if [ "$accumulate_gradients" == "true" ] ; then
-   ACCUMULATE_GRADIENTS="--gradient_accumulation_steps=$gradient_accumulation_steps_phase2"
-fi
-
-ALL_REDUCE_POST_ACCUMULATION=""
-if [ "$allreduce_post_accumulation" == "true" ] ; then
-   ALL_REDUCE_POST_ACCUMULATION="--allreduce_post_accumulation"
-fi
-
-ALL_REDUCE_POST_ACCUMULATION_FP16=""
-if [ "$allreduce_post_accumulation_fp16" == "true" ] ; then
-   ALL_REDUCE_POST_ACCUMULATION_FP16="--allreduce_post_accumulation_fp16"
-fi
-
-echo $DATA_DIR_PHASE2
-INPUT_DIR=$DATA_DIR_PHASE2
-CMD=" $CODEDIR/run_pretraining.py"
-CMD+=" --input_dir=$DATA_DIR_PHASE2"
-CMD+=" --output_dir=$CHECKPOINTS_DIR"
-CMD+=" --config_file=$BERT_CONFIG"
-CMD+=" --bert_model=bert-large-uncased"
-CMD+=" --train_batch_size=$train_batch_size_phase2"
-CMD+=" --max_seq_length=512"
-CMD+=" --max_predictions_per_seq=80"
-CMD+=" --max_steps=$train_steps_phase2"
-CMD+=" --warmup_proportion=$warmup_proportion_phase2"
-CMD+=" --num_steps_per_checkpoint=$save_checkpoint_steps"
-CMD+=" --learning_rate=$learning_rate_phase2"
-CMD+=" --seed=$seed"
-CMD+=" $PREC"
-CMD+=" $ACCUMULATE_GRADIENTS"
-CMD+=" $CHECKPOINT"
-CMD+=" $ALL_REDUCE_POST_ACCUMULATION"
-CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
-CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
-CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
-
-# CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
-
-#CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
-CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
-
-
-if [ "$create_logfile" = "true" ] ; then
-  export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
-  printf -v TAG "pyt_bert_pretraining_phase2_%s_gbs%d" "$precision" $GBS
-  DATESTAMP=`date +'%y%m%d%H%M%S'`
-  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
-  printf "Logs written to %s\n" "$LOGFILE"
-fi
-
-set -x
-if [ -z "$LOGFILE" ] ; then
-   $CMD
-else
-   (
-     $CMD
-   ) |& tee $LOGFILE
-fi
-
-set +x
-
-echo "finished phase2"
+#PREC=""
+#if [ "$precision" = "fp16" ] ; then
+#   PREC="--fp16"
+#elif [ "$precision" = "fp32" ] ; then
+#   PREC=""
+#elif [ "$precision" = "tf32" ] ; then
+#   PREC=""
+#else
+#   echo "Unknown <precision> argument"
+#   exit -2
+#fi
+#
+#ACCUMULATE_GRADIENTS=""
+#if [ "$accumulate_gradients" == "true" ] ; then
+#   ACCUMULATE_GRADIENTS="--gradient_accumulation_steps=$gradient_accumulation_steps_phase2"
+#fi
+#
+#ALL_REDUCE_POST_ACCUMULATION=""
+#if [ "$allreduce_post_accumulation" == "true" ] ; then
+#   ALL_REDUCE_POST_ACCUMULATION="--allreduce_post_accumulation"
+#fi
+#
+#ALL_REDUCE_POST_ACCUMULATION_FP16=""
+#if [ "$allreduce_post_accumulation_fp16" == "true" ] ; then
+#   ALL_REDUCE_POST_ACCUMULATION_FP16="--allreduce_post_accumulation_fp16"
+#fi
+#
+#echo $DATA_DIR_PHASE2
+#INPUT_DIR=$DATA_DIR_PHASE2
+#CMD=" $CODEDIR/run_pretraining.py"
+#CMD+=" --input_dir=$DATA_DIR_PHASE2"
+#CMD+=" --output_dir=$CHECKPOINTS_DIR"
+#CMD+=" --config_file=$BERT_CONFIG"
+#CMD+=" --bert_model=bert-large-uncased"
+#CMD+=" --train_batch_size=$train_batch_size_phase2"
+#CMD+=" --max_seq_length=512"
+#CMD+=" --max_predictions_per_seq=80"
+#CMD+=" --max_steps=$train_steps_phase2"
+#CMD+=" --warmup_proportion=$warmup_proportion_phase2"
+#CMD+=" --num_steps_per_checkpoint=$save_checkpoint_steps"
+#CMD+=" --learning_rate=$learning_rate_phase2"
+#CMD+=" --seed=$seed"
+#CMD+=" $PREC"
+#CMD+=" $ACCUMULATE_GRADIENTS"
+#CMD+=" $CHECKPOINT"
+#CMD+=" $ALL_REDUCE_POST_ACCUMULATION"
+#CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
+#CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
+#CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
+#
+## CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
+#
+##CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+#CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+#
+#
+#if [ "$create_logfile" = "true" ] ; then
+#  export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
+#  printf -v TAG "pyt_bert_pretraining_phase2_%s_gbs%d" "$precision" $GBS
+#  DATESTAMP=`date +'%y%m%d%H%M%S'`
+#  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
+#  printf "Logs written to %s\n" "$LOGFILE"
+#fi
+#
+#set -x
+#if [ -z "$LOGFILE" ] ; then
+#   $CMD
+#else
+#   (
+#     $CMD
+#   ) |& tee $LOGFILE
+#fi
+#
+#set +x
+#
+#echo "finished phase2"

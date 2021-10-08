@@ -152,14 +152,14 @@ CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distrib
 #   printf "Logs written to %s\n" "$LOGFILE"
 # fi
 # 
-# set -x
-# if [ -z "$LOGFILE" ] ; then
-#    $CMD
-# else
-#    (
-#      $CMD
-#    ) |& tee $LOGFILE
-# fi
+ set -x
+ if [ -z "$LOGFILE" ] ; then
+    $CMD
+ else
+    (
+      $CMD
+    ) |& tee $LOGFILE
+ fi
 # 
 # set +x
 # 
@@ -167,7 +167,7 @@ CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distrib
 # 
 #Start Phase2
 
-precision="fp16"
+:'precision="fp16"
 
 PREC=""
 if [ "$precision" = "fp16" ] ; then
@@ -226,8 +226,9 @@ CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python  -m torch.distrib
 if [ "$create_logfile" = "true" ] ; then
   export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
   printf -v TAG "pyt_bert_pretraining_phase2_%s_gbs%d" "$precision" $GBS
-  DATESTAMP=`date +'%y%m%d%H%M%S'`
-  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
+'
+#DATESTAMP=`date +'%y%m%d%H%M%S'`
+:'  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
   printf "Logs written to %s\n" "$LOGFILE"
 fi
 
@@ -243,3 +244,4 @@ fi
 set +x
 
 echo "finished phase2"
+'
