@@ -314,19 +314,8 @@ def parse_arguments():
     args.checkpoint_file = f'/shared/export/elastic/{args.label}/checkpoint.pth.tar'
     # if gradient accumulation file is found in S3 (written by autoscaler service,)
     # then use that file to update accumulation steps else use value passed in args
-    try:
-        # FIXME: hardcoded for now 
-        s3_prefix = f'resnet50/{args.label}/GNS/node_state'
-        text = read_s3_textfile(args.bucket, s3_prefix)
-        # read last line
-        text = text.splitlines()[-1]
-        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
-        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
-        args.gradient_accumulation_steps = grad_accum_steps
-    except Exception as e:
-        print(e)
-        print('Cannot find any recommendation from autoscaler service, continuing as before- current world size:', get_world_size())
-     
+    # `grad_accum_change_detected` has side-effect of updating args 
+    grad_accum_change_detected(args)
     return args
 
 
@@ -388,6 +377,27 @@ def fast_collate(batch, memory_format):
         nump_array = np.rollaxis(nump_array, 2)
         tensor[i] += torch.from_numpy(nump_array)
     return tensor, targets
+
+
+def grad_accum_change_detected(args):
+    # if gradient accumulation file is found in S3 (written by autoscaler service,)
+    # then use that file to update accumulation steps else use value passed in args
+    change_detected = False
+    try:
+        # FIXME: hardcoded for now 
+        s3_prefix = f'resnet50/{args.label}/GNS/node_state'
+        text = read_s3_textfile(args.bucket, s3_prefix)
+        # read last line
+        text = text.splitlines()[-1]
+        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
+        if args.gradient_accumulation_steps != grad_accum_steps:
+            change_detected = True
+        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
+        args.gradient_accumulation_steps = grad_accum_steps
+    except Exception as e:
+        print(e)
+        print('Cannot find any recommendation from autoscaler service, continuing as before- current world size:', get_world_size())
+    return change_detected
 
 
 def main_worker(args):
@@ -512,6 +522,10 @@ def main_worker(args):
 
     for epoch in range(start_epoch, args.epochs):
         state.epoch = epoch
+        if grad_accum_change_detected(args):
+            print("DETECTED CHANGE IN GRADIENT ACCUMULATION STEPS - RESTARTING CLUSTER")
+            # simulate a failure here so that PT elastic relaunches cluster
+            sys.exit(-1)
 
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -532,8 +546,8 @@ def main_worker(args):
         if get_rank() == 0:
             save_checkpoint(state, is_best, args.checkpoint_file)
             if args.enable_autoscaler:
-                # this fires a GNS info to be logged in S3 scaling service reads this info
-                # and initiates a resize if needed
+                # this fires a GNS info to be logged in S3.
+                # Scaling service reads this info and initiates a resize if needed
                 optimizer.check_for_cluster_resize()
 
     # close summary writer
@@ -709,8 +723,6 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
                 if global_step % 500 == 0:
                     save_checkpoint(state, False, args.checkpoint_file)
                     if args.enable_autoscaler:
-                        # this fires a GNS info to be logged in S3 scaling service reads this info
-                        # and initiates a resize if needed
                         optimizer.check_for_cluster_resize()
                     writer.flush()
         images, target = prefetcher.next()

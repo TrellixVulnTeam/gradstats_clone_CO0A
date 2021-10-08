@@ -270,7 +270,7 @@ class Sc4l3rDaemon(Daemon):
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.85.58",
+            etcd_addr="10.100.84.109",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,

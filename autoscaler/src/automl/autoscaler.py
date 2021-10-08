@@ -796,6 +796,7 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/var_curr', self._nonsmooth_var[0], scale_invariant_steps)
         self._summary_writer.add_scalar('Train/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
         self._summary_writer.add_scalar('Train/temperature', self._temperature, scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/scale', self._scale, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/var_si', self._var, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/sqr_si', self._sqr, scale_invariant_steps)
         # self._summary_writer.add_scalar('Train/allreduced_grad_sqr', self.total_grad_sqr[0], scale_invariant_steps)
