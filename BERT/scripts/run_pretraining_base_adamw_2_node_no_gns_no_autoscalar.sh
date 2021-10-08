@@ -56,7 +56,7 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_base_8_4node
+RESULTS_DIR=$CODEDIR/results/pretrain_base_2node_adam
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 TB_DIR=$RESULTS_DIR/tensorboard
 mkdir -p $CHECKPOINTS_DIR
