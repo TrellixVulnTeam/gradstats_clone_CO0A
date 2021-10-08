@@ -29,6 +29,7 @@ def upload_file(filepath, bucket, s3_prefix):
         return False
     return True
 
+#TODO: separate scaling logic from cluster state (create a state class)
 
 class ClusterScaler(object):
     def __init__(self,
@@ -54,6 +55,7 @@ class ClusterScaler(object):
         self._out_yaml = out_yaml
         self._nodestate_file = nodestate_file
         self._min_nodes = min_nodes
+        self._last_scaling_recommendation = min_nodes
         self._max_nodes = max_nodes
         self._gpus_per_node = gpus_per_node
         self._etcd_addr = etcd_addr
@@ -224,6 +226,17 @@ class ClusterScaler(object):
             # until we exhaust nodes do not add gradient accumulation
             trigger_scaling = True
         print("Scaling recommendation:", trigger_scaling, nodes_required, new_grad_accum_steps)
+        # sometimes when we recommended scaling the elastic setup does not
+        # respond as fast as desired and we end up issuing multiple requests which
+        # leads us to inconsistent training state
+        if trigger_scaling:
+            # first check if we achieved the last rescale target
+            if current_scaling_factor != self._last_scaling_recommendation:
+                # disable additional scaling until we hit the previous target
+                trigger_scaling = False
+                print("Canceling further scaling since previous scale request has not been completed")
+            else:
+                self._last_scaling_recommendation = nodes_required
         return trigger_scaling, nodes_required, new_grad_accum_steps
 
 
@@ -270,7 +283,7 @@ class Sc4l3rDaemon(Daemon):
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.84.109",
+            etcd_addr="10.100.222.253",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,

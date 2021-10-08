@@ -254,6 +254,7 @@ class AdaScale(Optimizer):
                 Whether to update the scale-depenent estimate of gradient
                 variance; this is highly recommended. (default: True)
         """
+        raise NotImplementedError
         assert self._local_grad_sqr is None, "Don't change scale in backward phase"
         assert scale >= 1, "Scale must be at least 1"
         adascale_state = self._optimizer.state_dict()['state']['adascale']

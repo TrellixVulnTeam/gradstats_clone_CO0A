@@ -138,10 +138,10 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-#    parser.add_argument('--autoscaler-cfg-path-template',
-#                        default="/gradstats/resnet50/imagenet/autoscaler_adam_{}x.yaml",
-#                        type=str,
-#                        help='AutoScaler configuration template')
+    parser.add_argument('--autoscaler-cfg-path',
+                        default="/gradstats/resnet50/imagenet/autoscaler.yaml",
+                        type=str,
+                        help='AutoScaler configuration')
 
     parser.add_argument('-j',
                         '--workers',
@@ -228,6 +228,11 @@ def parse_arguments():
                         metavar='N',
                         help='print frequency (default: 10)')
 
+    parser.add_argument('--ckpt-s3-sync-freq',
+                        default=500,
+                        type=int,
+                        help='print frequency (default: 500)')
+ 
     parser.add_argument('--resume',
                         default='',
                         type=str,
@@ -343,15 +348,15 @@ def setup_training(args):
     args.rank = int(os.environ["RANK"])
 
     ########## AUTOSCALER SETUP ##########
-    if args.enable_autoscaler:
-        # FIXME: hardcoded
-        args.autoscaler_cfg_path = "/gradstats/resnet50/imagenet/autoscaler.yaml"
 
     #NOTE: Rank ordering is not guaranteed across restarts
     args.logs_basedir = f'{args.log_dir}/{args.label}'
     args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
+    args.scaler_svc_recommendation_path = f'resnet50/{args.label}/GNS/node_state'
+    
+    ######################################
     return args
 
 
@@ -383,9 +388,8 @@ def grad_accum_change_detected(args):
     # if gradient accumulation file is found in S3 (written by autoscaler service,)
     # then use that file to update accumulation steps else use value passed in args
     change_detected = False
-    try:
-        # FIXME: hardcoded for now 
-        s3_prefix = f'resnet50/{args.label}/GNS/node_state'
+    try: 
+        s3_prefix = args.scaler_svc_recommendation_path
         text = read_s3_textfile(args.bucket, s3_prefix)
         # read last line
         text = text.splitlines()[-1]
@@ -493,7 +497,6 @@ def main_worker(args):
                                                prefetch_factor=2,
                                                collate_fn=collate_fn)
 
-    #FIXME: Check if still okay for elastic scenario
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size,
                                              shuffle=False,
@@ -719,8 +722,8 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
                     effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
                     gns = optimizer.gns()
                     print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
-                # save checkpoint, flush and push to S3 every 500 iterations FIXME: hardcoded
-                if global_step % 500 == 0:
+                # save checkpoint, flush and push to S3
+                if global_step % args.ckpt_s3_sync_freq == 0:
                     save_checkpoint(state, False, args.checkpoint_file)
                     if args.enable_autoscaler:
                         optimizer.check_for_cluster_resize()
@@ -889,3 +892,4 @@ def accuracy(output, target, topk=(1, )):
 
 if __name__ == '__main__':
     main()
+
