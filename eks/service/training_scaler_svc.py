@@ -29,6 +29,7 @@ def upload_file(filepath, bucket, s3_prefix):
         return False
     return True
 
+#TODO: separate scaling logic from cluster state (create a state class)
 
 class ClusterScaler(object):
     def __init__(self,
@@ -54,6 +55,8 @@ class ClusterScaler(object):
         self._out_yaml = out_yaml
         self._nodestate_file = nodestate_file
         self._min_nodes = min_nodes
+        self._last_scaling_recommendation = min_nodes
+        self._last_grad_accum_steps = 1
         self._max_nodes = max_nodes
         self._gpus_per_node = gpus_per_node
         self._etcd_addr = etcd_addr
@@ -105,7 +108,7 @@ class ClusterScaler(object):
             body = s3_object['Body']
             text = body.read().decode('utf-8')
             last_line = text.splitlines()[-1]
-            # 1024,4,True,256,1,4830
+            # (3840, 60, True, 256, 1, 5865, 1633599616)
             current_bs,current_num_workers,grad_accum_supported,scale_one_bs,num_grads_accumulated,gns,timestamp = last_line.split(',')
             current_bs = int(current_bs)
             current_num_workers = int(current_num_workers)
@@ -206,23 +209,39 @@ class ClusterScaler(object):
             trigger_scaling = False #TODO: downscaling cluster not supported initially
         elif nodes_required > self._max_nodes:
             nodes_required = self._max_nodes
-            # check if gradient accumulation is supported
-            if grad_accum_supported:
-                # calculate num grad accum steps (keep per-gpu batch size same)
-                new_bs = desired_scaling_factor * scale_one_bs
-                bs_per_gpu_without_accum = int(current_bs / current_num_workers / num_grads_accumulated)
-                new_bs_per_gpu = int(new_bs / self._max_nodes / self._gpus_per_node)
-                new_grad_accum_steps = new_bs_per_gpu // bs_per_gpu_without_accum
-                if new_grad_accum_steps == num_grads_accumulated:
-                    print("New accumulation steps:", new_grad_accum_steps, "Same as before - no scaling!")
-                    trigger_scaling = False
+            if current_scaling_factor < self._max_nodes:
+                # first fill up nodes that are available
                 trigger_scaling = True
+                new_grad_accum_steps = 1
+            elif grad_accum_supported:
+                if desired_scaling_factor % self._max_nodes != 0:
+                    # we only support accumulation with multiples of per gpu batch size
+                    trigger_scaling = False
+                    new_grad_accum_steps = 1
+                else:
+                    trigger_scaling = True
+                    new_grad_accum_steps = int(desired_scaling_factor/self._max_nodes)
+                    if self._last_grad_accum_steps >= new_grad_accum_steps:
+                        trigger_scaling = False
+                    else:
+                        self._last_grad_accum_steps = new_grad_accum_steps
             else:
                 trigger_scaling = False
         else:
             # until we exhaust nodes do not add gradient accumulation
             trigger_scaling = True
         print("Scaling recommendation:", trigger_scaling, nodes_required, new_grad_accum_steps)
+        # sometimes when we recommended scaling the elastic setup does not
+        # respond as fast as desired and we end up issuing multiple requests which
+        # leads us to inconsistent training state
+        if trigger_scaling:
+            # first check if we achieved the last rescale target
+            if current_scaling_factor != self._last_scaling_recommendation:
+                # disable additional scaling until we hit the previous target
+                trigger_scaling = False
+                print("Canceling further scaling since previous scale request has not been completed")
+            else:
+                self._last_scaling_recommendation = nodes_required
         return trigger_scaling, nodes_required, new_grad_accum_steps
 
 
@@ -236,7 +255,7 @@ class ClusterScaler(object):
             # check current GNS prediction
             current_cluster_state = self._get_current_cluster_state()
             if current_cluster_state:
-                print(current_cluster_state)
+                print("Current cluster state:", current_cluster_state)
                 trigger_scaling, nodes_required, new_grad_accum_steps = self._get_scaling_recommendation(current_cluster_state)
                 if trigger_scaling:
                     with open(self._nodestate_file, 'w') as f:
@@ -265,15 +284,15 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_1_delme',
+            'r50_elastic_8_delme',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.98.238",
+            etcd_addr="10.100.91.37",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,
-            poll_interval=120) # seconds - deliberately kept large to account for container load time
+            poll_interval=60) # seconds - deliberately kept large to account for container load time
 
 
     def run(self):

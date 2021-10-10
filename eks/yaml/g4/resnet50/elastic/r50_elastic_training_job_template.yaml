@@ -1,14 +1,14 @@
 apiVersion: elastic.pytorch.org/v1alpha1
 kind: ElasticJob
 metadata:
-  name: "r50-elastic-7-autoscaler-job"
+  name: "r50-elastic-8-autoscaler-job"
   namespace: elastic-job
 spec:
   # Use "etcd-service:2379" if you already apply etcd.yaml
   # Update for scaling via template - autoscaler cfg needs to move dynamic parts out
   rdzvEndpoint: "{{etcd_server}}:2379"
   minReplicas: 1
-  maxReplicas: 32
+  maxReplicas: 16
   replicaSpecs:
     Worker:
       replicas: {{num_replicas}}
@@ -47,7 +47,7 @@ spec:
                 - "--enable-autoscaler"
                 - "--epochs=90"
                 - "--channels-last"
-                - "--label=r50_elastic_1_delme"
+                - "--label=r50_elastic_8_delme"
               resources:
                 limits:
                   nvidia.com/gpu: 4

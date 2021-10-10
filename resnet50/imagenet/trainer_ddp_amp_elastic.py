@@ -4,7 +4,7 @@ import random
 import shutil
 import time
 import warnings
-
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -19,7 +19,6 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
-import math
 from automl.autoscaler import AdaScale
 from automl.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
@@ -31,6 +30,10 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
+# global step needs to be part of checkpoint - to keep track of progress when
+# cluster resize occurs
+
+global_step = 0 
 
 #TODO: Refactor this class - generalize for all models
 class State:
@@ -45,6 +48,7 @@ class State:
         self.arch = arch
         self.model = model
         self.optimizer = optimizer
+        self.global_step = 0
 
     def capture_snapshot(self):
         """
@@ -62,6 +66,7 @@ class State:
             "arch": self.arch,
             "state_dict": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
+            "global_step": self.global_step
         }
 
     def apply_snapshot(self, obj, device_id):
@@ -75,6 +80,7 @@ class State:
         self.state_dict = obj["state_dict"]
         self.model.load_state_dict(obj["state_dict"])
         self.optimizer.load_state_dict(obj["optimizer"])
+        self.global_step = obj["global_step"]
 
     def save(self, f):
         torch.save(self.capture_snapshot(), f)
@@ -131,10 +137,10 @@ def parse_arguments():
                         action='store_true',
                         help='condition gradients with moving average stats')
 
-#    parser.add_argument('--autoscaler-cfg-path-template',
-#                        default="/gradstats/resnet50/imagenet/autoscaler_adam_{}x.yaml",
-#                        type=str,
-#                        help='AutoScaler configuration template')
+    parser.add_argument('--autoscaler-cfg-path',
+                        default="/gradstats/resnet50/imagenet/autoscaler.yaml",
+                        type=str,
+                        help='AutoScaler configuration')
 
     parser.add_argument('-j',
                         '--workers',
@@ -221,6 +227,11 @@ def parse_arguments():
                         metavar='N',
                         help='print frequency (default: 10)')
 
+    parser.add_argument('--ckpt-s3-sync-freq',
+                        default=500,
+                        type=int,
+                        help='print frequency (default: 500)')
+ 
     parser.add_argument('--resume',
                         default='',
                         type=str,
@@ -283,7 +294,7 @@ def parse_arguments():
                         help="enable channels last for tensor cores")
 
     parser.add_argument('--log_dir',
-                        default='/shared/logs',
+                        default='/shared/export/logs',
                         type=str,
                         help='log directory path.')
 
@@ -299,31 +310,17 @@ def parse_arguments():
                         help='s3 bucket for tensorboard')
 
     parser.add_argument("--checkpoint-file",
-                        default="/shared/elastic/checkpoint.pth.tar",
+                        default="/shared/export/elastic/checkpoint.pth.tar",
                         type=str,
                         help="checkpoint file path, to load and save to")
 
     args = parser.parse_args()
-
+    args.checkpoint_file = f'/shared/export/elastic/{args.label}/checkpoint.pth.tar'
     # if gradient accumulation file is found in S3 (written by autoscaler service,)
     # then use that file to update accumulation steps else use value passed in args
-    try:
-        # FIXME: hardcoded for now 
-        s3_prefix = 'resnet50/r50_elastic_1_delme/GNS/node_state'
-        text = read_s3_textfile(args.bucket, s3_prefix)
-        # read last line
-        text = text.splitlines()[-1]
-        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
-        # TODO: check -> num_workers = number of DDP processes
-        assert num_workers == get_world_size(), "At this point cluster resize \
-                should have been completed by EKS. Recommendation from autoscaler \
-                should match current nodes"
-        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
-        args.gradient_accumulation_steps = grad_accum_steps
-    except Exception as e:
-        print(e)
-        print('Cannot find any recommendation from autoscaler service, continuing as before- current world size:', get_world_size())
-     
+    # `grad_accum_change_detected` has side-effect of updating args 
+    args.scaler_svc_recommendation_path = f'resnet50/{args.label}/GNS/node_state'
+    grad_accum_change_detected(args)
     return args
 
 
@@ -351,20 +348,14 @@ def setup_training(args):
     args.rank = int(os.environ["RANK"])
 
     ########## AUTOSCALER SETUP ##########
-    if args.enable_autoscaler:
-        # FIXME: hardcoded
-        args.autoscaler_cfg_path = "/gradstats/resnet50/imagenet/autoscaler.yaml"
-
-
 
     #NOTE: Rank ordering is not guaranteed across restarts
     args.logs_basedir = f'{args.log_dir}/{args.label}'
     args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
-#    args.gns_path = f'{args.logs_basedir}/GNS'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
-#    make_path_if_not_exists(args.gns_path)
-
+    
+    ######################################
     return args
 
 
@@ -376,7 +367,6 @@ def main():
 
 # data pipeline enhancements from https://github.com/NVIDIA/apex/blob/master/examples/imagenet/main_amp.py
 def fast_collate(batch, memory_format):
-
     imgs = [img[0] for img in batch]
     targets = torch.tensor([target[1] for target in batch], dtype=torch.int64)
     w = imgs[0].size[0]
@@ -391,6 +381,26 @@ def fast_collate(batch, memory_format):
         nump_array = np.rollaxis(nump_array, 2)
         tensor[i] += torch.from_numpy(nump_array)
     return tensor, targets
+
+
+def grad_accum_change_detected(args):
+    # if gradient accumulation file is found in S3 (written by autoscaler service,)
+    # then use that file to update accumulation steps else use value passed in args
+    change_detected = False
+    try: 
+        s3_prefix = args.scaler_svc_recommendation_path
+        text = read_s3_textfile(args.bucket, s3_prefix)
+        # read last line
+        text = text.splitlines()[-1]
+        num_workers, grad_accum_steps = [int(col) for col in text.split(',')]
+        if args.gradient_accumulation_steps != grad_accum_steps:
+            change_detected = True
+        print(f'Setting gradient accumulation steps to {grad_accum_steps} as per recommendation')
+        args.gradient_accumulation_steps = grad_accum_steps
+    except Exception as e:
+        print(e)
+        print('Cannot find any recommendation from autoscaler service, continuing as before- current world size:', get_world_size())
+    return change_detected
 
 
 def main_worker(args):
@@ -441,6 +451,7 @@ def main_worker(args):
         optimizer = AdaScale(
             optimizer,
             autoscaler_cfg_path=args.autoscaler_cfg_path,
+            num_grads_to_accum=args.gradient_accumulation_steps,
             model=model,
             scaler=scaler,
             summary_writer=writer)
@@ -486,7 +497,6 @@ def main_worker(args):
                                                prefetch_factor=2,
                                                collate_fn=collate_fn)
 
-    #FIXME: Check if still okay for elastic scenario
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size,
                                              shuffle=False,
@@ -508,10 +518,17 @@ def main_worker(args):
     state = load_checkpoint(args.checkpoint_file, device_id, args.arch, model, optimizer)
 
     start_epoch = state.epoch + 1
-    print(f"=====> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}")
+    global global_step
+    global_step = state.global_step
+
+    print(f"=====> start_epoch: {start_epoch}, best_acc1: {state.best_acc1}, restored_global_step: {global_step}")
 
     for epoch in range(start_epoch, args.epochs):
         state.epoch = epoch
+        if grad_accum_change_detected(args):
+            print("DETECTED CHANGE IN GRADIENT ACCUMULATION STEPS - RESTARTING CLUSTER")
+            # simulate a failure here so that PT elastic relaunches cluster
+            sys.exit(-1)
 
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -520,7 +537,7 @@ def main_worker(args):
             adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args)
+        train(train_loader, model, criterion, optimizer, scaler, writer, epoch, state, args)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, writer, epoch, args)
@@ -532,8 +549,8 @@ def main_worker(args):
         if get_rank() == 0:
             save_checkpoint(state, is_best, args.checkpoint_file)
             if args.enable_autoscaler:
-                # this fires a GNS info to be logged in S3 scaling service reads this info
-                # and initiates a resize if needed
+                # this fires a GNS info to be logged in S3.
+                # Scaling service reads this info and initiates a resize if needed
                 optimizer.check_for_cluster_resize()
 
     # close summary writer
@@ -593,10 +610,7 @@ class data_prefetcher():
         return input, target
 
 
-global_step = 0 
-
-
-def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args):
+def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, state, args):
     global global_step
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
@@ -608,7 +622,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     scale_one_gbs = int(args.batch_size * effective_world_size // optimizer.scale)
     scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_gbs)
 
-    print("==>", effective_world_size, len(train_loader), scale_one_gbs, scale_one_steps_per_epoch)
+    print("==>", effective_world_size, len(train_loader), scale_one_gbs, scale_one_steps_per_epoch, global_step)
 
     progress = ProgressMeter(scale_one_steps_per_epoch,
                              [batch_time, data_time, losses, top1, top5],
@@ -627,6 +641,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
     curr_epoch_step = 0 # only to track grad accumulation related stuff
     while images is not None:
         global_step += 1
+        state.global_step = global_step
         curr_epoch_step += 1
        
         ###### DEBUG ########
@@ -707,8 +722,11 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, args
                     effective_lr = gain * optimizer.param_groups[0]['lr'] # assuming that all groups have same LR
                     gns = optimizer.gns()
                     print("gain={}\ngns={}\nsi_steps={}\neffective lr={}".format(gain, gns, scheduler_progress, effective_lr))
-                # flush and push to S3 every 500 iterations FIXME: hardcoded
-                if global_step % 500 == 0:
+                # save checkpoint, flush and push to S3
+                if global_step % args.ckpt_s3_sync_freq == 0:
+                    save_checkpoint(state, False, args.checkpoint_file)
+                    if args.enable_autoscaler:
+                        optimizer.check_for_cluster_resize()
                     writer.flush()
         images, target = prefetcher.next()
 
@@ -874,3 +892,4 @@ def accuracy(output, target, topk=(1, )):
 
 if __name__ == '__main__':
     main()
+
