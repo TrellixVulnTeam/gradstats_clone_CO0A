@@ -36,12 +36,13 @@ class AdaScale(Optimizer):
         summary_writer (Tensorboard Summary Writer): Summary writer used to
             log stats for tensorboard
     """
-    def __init__(self, optimizer: torch.optim.Optimizer,
-                    autoscaler_cfg_path: str,
-                    # batch_size,
-                    model = None,
-                    scaler = None,
-                    summary_writer=None):
+    def __init__(self,
+            optimizer: torch.optim.Optimizer,
+            autoscaler_cfg_path: str,
+            num_grads_to_accum = 1,
+            model = None,
+            scaler = None,
+            summary_writer=None):
         self._model = model # must be set if grad clipping is done
         self._optimizer = optimizer
         self._summary_writer = summary_writer 
@@ -71,7 +72,11 @@ class AdaScale(Optimizer):
         # boolean indicating if accumulation already takes care of accum division in
         # main training loop
         self._adjust_grads_for_accumulation = self.cfg.adjust_gradients_for_accumulation
-        self._num_grads_to_accum = self.cfg.num_gradients_to_accumulate
+        
+        # self._num_grads_to_accum = self.cfg.num_gradients_to_accumulate
+        # setting grads to accumulate based on current cluster state (not a static configuration in case of elastic)
+        self._num_grads_to_accum = num_grads_to_accum
+
         # boolean indicating if gradient accumulation is implemented by training script
         self._gradient_accumulation_supported = self.cfg.gradient_accumulation_supported
         if not self._gradient_accumulation_supported:
@@ -640,12 +645,12 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't step without finishing backward phase"
         if self._gain_invalid:
             return 1 # should this be 1 or 0
-        prev_steps = adascale_state['scale_invariant_steps'] # np.floor(adascale_state['scale_invariant_steps'])
+        prev_steps = np.floor(adascale_state['scale_invariant_steps'])
         adascale_state['scale_invariant_steps'] += self.scale_invariant_steps()
         adascale_state['scale'] = self._scale
-        step_increment = adascale_state['scale_invariant_steps'] - prev_steps # np.floor(adascale_state['scale_invariant_steps'] - prev_steps)
+        step_increment = np.floor(adascale_state['scale_invariant_steps'] - prev_steps)
         self._real_iterations += 1
-        return min(self._scale, math.ceil(step_increment)) # int(step_increment)
+        return int(step_increment)
 
 
     def step(self, *args: Any, **kwargs: Any) -> Optional[float]:
@@ -798,6 +803,7 @@ class AdaScale(Optimizer):
         self._summary_writer.add_scalar('Train/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
         self._summary_writer.add_scalar('Train/temperature', self._temperature, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/scale', self._scale, scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/accum_steps', self._num_grads_to_accum, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/var_si', self._var, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/sqr_si', self._sqr, scale_invariant_steps)
         # self._summary_writer.add_scalar('Train/allreduced_grad_sqr', self.total_grad_sqr[0], scale_invariant_steps)

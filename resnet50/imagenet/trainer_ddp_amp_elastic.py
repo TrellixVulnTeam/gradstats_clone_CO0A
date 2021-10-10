@@ -4,7 +4,7 @@ import random
 import shutil
 import time
 import warnings
-
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -19,7 +19,6 @@ import torchvision.datasets as datasets
 import torchvision.models as models
 from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
-import math
 from automl.autoscaler import AdaScale
 from automl.optim.adamw import AdamW
 from torch.utils.tensorboard import SummaryWriter
@@ -320,6 +319,7 @@ def parse_arguments():
     # if gradient accumulation file is found in S3 (written by autoscaler service,)
     # then use that file to update accumulation steps else use value passed in args
     # `grad_accum_change_detected` has side-effect of updating args 
+    args.scaler_svc_recommendation_path = f'resnet50/{args.label}/GNS/node_state'
     grad_accum_change_detected(args)
     return args
 
@@ -354,7 +354,6 @@ def setup_training(args):
     args.tensorboard_path = f'{args.logs_basedir}/worker-{dist.get_rank()}'
     # create dirs that don't exist
     make_path_if_not_exists(args.tensorboard_path)
-    args.scaler_svc_recommendation_path = f'resnet50/{args.label}/GNS/node_state'
     
     ######################################
     return args
@@ -452,6 +451,7 @@ def main_worker(args):
         optimizer = AdaScale(
             optimizer,
             autoscaler_cfg_path=args.autoscaler_cfg_path,
+            num_grads_to_accum=args.gradient_accumulation_steps,
             model=model,
             scaler=scaler,
             summary_writer=writer)

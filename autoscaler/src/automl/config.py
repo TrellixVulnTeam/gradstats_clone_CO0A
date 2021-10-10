@@ -30,15 +30,15 @@ class AutoScalerConfig:
         self.update_interval = autoscaler_config['update_interval']
         self.precondition_gradients = autoscaler_config['precondition_gradients']
         self.smoothing =  autoscaler_config['smoothing']
-        self.num_gradients_to_accumulate = autoscaler_config['num_gradients_to_accumulate']
-        assert self.num_gradients_to_accumulate >= 1, "Must collect a positive integer"
+        # self.num_gradients_to_accumulate = autoscaler_config['num_gradients_to_accumulate']
+        # assert self.num_gradients_to_accumulate >= 1, "Must collect a positive integer"
 
-        self.enable_adascale = adascale_config['enabled']
+        # self.enable_adascale = adascale_config['enabled']
         self.aggressive_schedule = adascale_config['aggressive_schedule']
         self.max_grad_norm = adascale_config['max_grad_norm']
         self.is_adaptive = adascale_config['is_adaptive']
         self.use_pt_adam = adascale_config['use_pt_adam']
-        self.enable_gns = gns_config['enabled']
+        # self.enable_gns = gns_config['enabled']
         self.batch_size_upper_limit = gns_config['batch_size_upper_limit']
         self.scale_one_batch_size = gns_config['scale_one_batch_size']
         self.scale_one_world_size = gns_config['scale_one_world_size']

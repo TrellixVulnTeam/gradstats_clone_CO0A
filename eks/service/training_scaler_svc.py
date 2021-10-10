@@ -56,6 +56,7 @@ class ClusterScaler(object):
         self._nodestate_file = nodestate_file
         self._min_nodes = min_nodes
         self._last_scaling_recommendation = min_nodes
+        self._last_grad_accum_steps = 1
         self._max_nodes = max_nodes
         self._gpus_per_node = gpus_per_node
         self._etcd_addr = etcd_addr
@@ -220,6 +221,10 @@ class ClusterScaler(object):
                 else:
                     trigger_scaling = True
                     new_grad_accum_steps = int(desired_scaling_factor/self._max_nodes)
+                    if self._last_grad_accum_steps >= new_grad_accum_steps:
+                        trigger_scaling = False
+                    else:
+                        self._last_grad_accum_steps = new_grad_accum_steps
             else:
                 trigger_scaling = False
         else:
@@ -279,11 +284,11 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_7_delme',
+            'r50_elastic_8_delme',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.222.253",
+            etcd_addr="10.100.91.37",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,
