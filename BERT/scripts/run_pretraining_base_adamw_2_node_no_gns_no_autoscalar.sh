@@ -59,6 +59,7 @@ init_checkpoint=${24:-"None"}
 RESULTS_DIR=$CODEDIR/results/pretrain_base_2node_adam
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 TB_DIR=$RESULTS_DIR/tensorboard
+BUCKET=mansmane-us-west-2
 mkdir -p $CHECKPOINTS_DIR
  
  
@@ -146,7 +147,9 @@ CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
 CMD+=" $INIT_CHECKPOINT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
+TB_DIR=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
+CMD+=" --bucket ${BUCKET} "
  
 # # set up environment variables for Torch DistributedDataParallel
 WORLD_SIZE=$SLURM_NTASKS
@@ -164,95 +167,9 @@ export NCCL_DEBUG=INFO
 CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 
-if [ "$create_logfile" = "true" ] ; then
-  export GBS=$(expr $train_batch_size \* $num_gpus)
-  printf -v TAG "pyt_bert_pretraining_phase1_%s_gbs%d" "$precision" $GBS
-  DATESTAMP=`date +'%y%m%d%H%M%S'`
-  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
-  printf "Logs written to %s\n" "$LOGFILE"
-fi
-
-set -x
-if [ -z "$LOGFILE" ] ; then
-   $CMD
-else
-   (
-     $CMD
-   ) |& tee $LOGFILE
-fi
-
-set +x
-
-echo "finished pretraining"
-
-# #Start Phase2
-
-# precision="fp16"
-
-# PREC=""
-# if [ "$precision" = "fp16" ] ; then
-#    PREC="--fp16"
-# elif [ "$precision" = "fp32" ] ; then
-#    PREC=""
-# elif [ "$precision" = "tf32" ] ; then
-#    PREC=""
-# else
-#    echo "Unknown <precision> argument"
-#    exit -2
-# fi
-
-# ACCUMULATE_GRADIENTS=""
-# if [ "$accumulate_gradients" == "true" ] ; then
-#    ACCUMULATE_GRADIENTS="--gradient_accumulation_steps=$gradient_accumulation_steps_phase2"
-# fi
-
-# ALL_REDUCE_POST_ACCUMULATION=""
-# if [ "$allreduce_post_accumulation" == "true" ] ; then
-#    ALL_REDUCE_POST_ACCUMULATION="--allreduce_post_accumulation"
-# fi
-
-# ALL_REDUCE_POST_ACCUMULATION_FP16=""
-# if [ "$allreduce_post_accumulation_fp16" == "true" ] ; then
-#    ALL_REDUCE_POST_ACCUMULATION_FP16="--allreduce_post_accumulation_fp16"
-# fi
-
-# echo $DATA_DIR_PHASE2
-# INPUT_DIR=$DATA_DIR_PHASE2
-# CMD=" $CODEDIR/run_pretraining.py"
-# CMD+=" --input_dir=$DATA_DIR_PHASE2"
-# CMD+=" --output_dir=$CHECKPOINTS_DIR"
-# CMD+=" --config_file=$BERT_CONFIG"
-# CMD+=" --bert_model=bert-base-uncased"
-# CMD+=" --train_batch_size=$train_batch_size_phase2"
-# CMD+=" --max_seq_length=512"
-# CMD+=" --max_predictions_per_seq=80"
-# CMD+=" --max_steps=$train_steps_phase2"
-# CMD+=" --warmup_proportion=$warmup_proportion_phase2"
-# CMD+=" --num_steps_per_checkpoint=$save_checkpoint_steps"
-# CMD+=" --learning_rate=$learning_rate_phase2"
-# CMD+=" --use_adamw"
-# CMD+=" --adamw_beta1=$adamw_phase2_beta1"
-# CMD+=" --adamw_beta2=$adamw_phase2_beta2"
-# CMD+=" --adamw_weight_decay=$adamw_weight_decay"
-# CMD+=" --adamw_eps=$adamw_eps"
-# CMD+=" --lr_poly_power=$lr_poly_power"
-# CMD+=" --seed=$seed"
-# CMD+=" --disable_progress_bar"
-# CMD+=" $PREC"
-# CMD+=" $ACCUMULATE_GRADIENTS"
-# CMD+=" $CHECKPOINT"
-# CMD+=" $ALL_REDUCE_POST_ACCUMULATION"
-# CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
-# CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
-# CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
-
-# # CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
-
-# CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
-
 # if [ "$create_logfile" = "true" ] ; then
-#   export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
-#   printf -v TAG "pyt_bert_pretraining_phase2_%s_gbs%d" "$precision" $GBS
+#   export GBS=$(expr $train_batch_size \* $num_gpus)
+#   printf -v TAG "pyt_bert_pretraining_phase1_%s_gbs%d" "$precision" $GBS
 #   DATESTAMP=`date +'%y%m%d%H%M%S'`
 #   LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
 #   printf "Logs written to %s\n" "$LOGFILE"
@@ -269,4 +186,92 @@ echo "finished pretraining"
 
 # set +x
 
-# echo "finished phase2"
+# echo "finished pretraining"
+
+#Start Phase2
+
+precision="fp16"
+
+PREC=""
+if [ "$precision" = "fp16" ] ; then
+   PREC="--fp16"
+elif [ "$precision" = "fp32" ] ; then
+   PREC=""
+elif [ "$precision" = "tf32" ] ; then
+   PREC=""
+else
+   echo "Unknown <precision> argument"
+   exit -2
+fi
+
+ACCUMULATE_GRADIENTS=""
+if [ "$accumulate_gradients" == "true" ] ; then
+   ACCUMULATE_GRADIENTS="--gradient_accumulation_steps=$gradient_accumulation_steps_phase2"
+fi
+
+ALL_REDUCE_POST_ACCUMULATION=""
+if [ "$allreduce_post_accumulation" == "true" ] ; then
+   ALL_REDUCE_POST_ACCUMULATION="--allreduce_post_accumulation"
+fi
+
+ALL_REDUCE_POST_ACCUMULATION_FP16=""
+if [ "$allreduce_post_accumulation_fp16" == "true" ] ; then
+   ALL_REDUCE_POST_ACCUMULATION_FP16="--allreduce_post_accumulation_fp16"
+fi
+
+echo $DATA_DIR_PHASE2
+INPUT_DIR=$DATA_DIR_PHASE2
+CMD=" $CODEDIR/run_pretraining.py"
+CMD+=" --input_dir=$DATA_DIR_PHASE2"
+CMD+=" --output_dir=$CHECKPOINTS_DIR"
+CMD+=" --config_file=$BERT_CONFIG"
+CMD+=" --bert_model=bert-base-uncased"
+CMD+=" --train_batch_size=$train_batch_size_phase2"
+CMD+=" --max_seq_length=512"
+CMD+=" --max_predictions_per_seq=80"
+CMD+=" --max_steps=$train_steps_phase2"
+CMD+=" --warmup_proportion=$warmup_proportion_phase2"
+CMD+=" --num_steps_per_checkpoint=$save_checkpoint_steps"
+CMD+=" --learning_rate=$learning_rate_phase2"
+CMD+=" --use_adamw"
+CMD+=" --adamw_beta1=$adamw_phase2_beta1"
+CMD+=" --adamw_beta2=$adamw_phase2_beta2"
+CMD+=" --adamw_weight_decay=$adamw_weight_decay"
+CMD+=" --adamw_eps=$adamw_eps"
+CMD+=" --lr_poly_power=$lr_poly_power"
+CMD+=" --seed=$seed"
+CMD+=" --disable_progress_bar"
+CMD+=" $PREC"
+CMD+=" $ACCUMULATE_GRADIENTS"
+CMD+=" $CHECKPOINT"
+CMD+=" $ALL_REDUCE_POST_ACCUMULATION"
+CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
+CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
+CMD+=" --json-summary ${RESULTS_DIR}/dllogger2.json "
+CMD+=" --log_dir ${TB_DIR} "
+CMD+=" --bucket ${BUCKET} "
+
+# CMD="python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
+
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+
+if [ "$create_logfile" = "true" ] ; then
+  export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
+  printf -v TAG "pyt_bert_pretraining_phase2_%s_gbs%d" "$precision" $GBS
+  DATESTAMP=`date +'%y%m%d%H%M%S'`
+  LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
+  printf "Logs written to %s\n" "$LOGFILE"
+fi
+
+set -x
+if [ -z "$LOGFILE" ] ; then
+   $CMD
+else
+   (
+     $CMD
+   ) |& tee $LOGFILE
+fi
+
+set +x
+
+echo "finished phase2"
