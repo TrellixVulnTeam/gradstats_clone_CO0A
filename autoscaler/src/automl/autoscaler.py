@@ -157,7 +157,7 @@ class AdaScale(Optimizer):
         self.state = self._optimizer.state
         self.local_grad_sqr = None
         # stability related constants for ADAM with AdaScale
-        self._SAFE_UPDATE_RATIO = 50.0 # 10.0 #TODO: Investigate if gradient clipping obviates this
+        self._SAFE_UPDATE_RATIO = 10.0 #TODO: Investigate if gradient clipping obviates this
         self._MIN_STEPS = 50
 
 
@@ -405,7 +405,7 @@ class AdaScale(Optimizer):
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         if self._real_iterations < self._MIN_STEPS:
             # allow averages to stabilize before predicting
-            self._gns = self._scale_one_batch_size
+            self._gns = self._current_batch_size # self._scale_one_batch_size
             self._update_avg("gns_avg", np.array([self._gns]), 0.9)
             return self._gns
         if self._gain_invalid[0] != 0:
@@ -446,11 +446,11 @@ class AdaScale(Optimizer):
     def _get_norm_squared(self, pg_idx, param, grad):
         grad = grad.detach().clone()
         # unscale grads before computing squares - else numbers blow up with scale
-        divisor = self._loss_scale_squared
-        if not self._precondition_gradients:
-            preconditioner = self._calculate_preconditioner(pg_idx, param)
-            divisor.mul_(preconditioner)
-        grad.div_(divisor)
+        if self._precondition_gradients:
+            preconditioner = self._calculate_preconditioner(pg_idx, param) * self._loss_scale_squared
+            grad.div_(preconditioner)
+        else:
+            grad.div_(self._loss_scale_squared)
         return grad.pow(2).sum()
 
 

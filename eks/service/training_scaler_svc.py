@@ -201,10 +201,10 @@ class ClusterScaler(object):
         if self._last_scale_timestamp == timestamp:
             return False, 0, 0
         self._last_scale_timestamp = timestamp
-        desired_scaling_factor = gns // scale_one_bs
+        desired_scaling_factor = min(gns // scale_one_bs, 2 * self._max_nodes) # limit scaling to 2x the nodes
         current_scaling_factor = current_bs // scale_one_bs
         print(f'current_bs={current_bs}, gns={gns}, desired_scaling_factor={desired_scaling_factor}, current_scaling_factor={current_scaling_factor}')
-        nodes_required = desired_scaling_factor
+        nodes_required = min(2 * current_scaling_factor, desired_scaling_factor) # increase scale by 2x each time
         if desired_scaling_factor <= current_scaling_factor:
             trigger_scaling = False #TODO: downscaling cluster not supported initially
         elif nodes_required > self._max_nodes:
@@ -248,9 +248,8 @@ class ClusterScaler(object):
 
     ####### MAIN SERVICE LOOP #######
     def run(self):
+        skip_count = 0
         while True:
-            # with open('/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/service/debug', 'w') as f:
-            #     print("RUNNING", file=f)
             time.sleep(self._poll_interval)
             # check current GNS prediction
             current_cluster_state = self._get_current_cluster_state()
@@ -284,15 +283,15 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_8_delme',
+            'r50_elastic_convergence_delme',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.91.37",
+            etcd_addr="10.100.191.135",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,
-            poll_interval=60) # seconds - deliberately kept large to account for container load time
+            poll_interval=900) # check for cluster state every 15 mins (this also controls cluster resize frequency)
 
 
     def run(self):
