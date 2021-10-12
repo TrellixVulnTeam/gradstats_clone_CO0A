@@ -500,7 +500,7 @@ def main_worker(args):
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size,
                                              shuffle=False,
-                                             num_workers=args.workers,
+                                             num_workers=2,
                                              pin_memory=True,
                                              sampler=val_sampler,
                                              prefetch_factor=2,
@@ -640,10 +640,8 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
     accumulate_gradients = args.gradient_accumulation_steps > 1
     curr_epoch_step = 0 # only to track grad accumulation related stuff
     while images is not None:
-        global_step += 1
         state.global_step = global_step
         curr_epoch_step += 1
-       
         ###### DEBUG ########
         # scale_one_steps_per_epoch = 100
         #####################
@@ -677,6 +675,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
             with model.no_sync():
                 scaler.scale(loss).backward()
         else:
+            global_step += 1
             scaler.scale(loss).backward()
             # at the last accum step, take one optim step
             if args.enable_autoscaler:
@@ -709,7 +708,7 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
                 linear_decay_learning_rate(optimizer, tensorboard_step, total_steps, args)
 
             if get_rank() == 0 and args.enable_autoscaler:
-                optimizer.log_to_tensorboard(global_step // args.gradient_accumulation_steps)
+                optimizer.log_to_tensorboard(global_step)
             if curr_epoch_step % args.print_freq == 0 and get_rank() == 0:
                 progress.display(i)
                 writer.add_scalar('Train/Loss', losses.avg, tensorboard_step)

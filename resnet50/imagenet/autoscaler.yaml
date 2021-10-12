@@ -1,6 +1,6 @@
 autoscaler:
   model_name: "resnet50"
-  training_label: "r50_elastic_8_delme"
+  training_label: "r50_elastic_convergence_delme"
   s3_bucket: "mzanur-autoscaler"
   log_dir: "/shared/export/logs"
   enable_debug: Off
@@ -19,7 +19,7 @@ adascale:
   aggressive_schedule: Off
   is_adaptive: True
   use_pt_adam: True
-  max_grad_norm: 5.0
+  max_grad_norm: 0.0
 gradient_noise_scale:
 #  enabled: Off
   batch_size_upper_limit: .Inf
