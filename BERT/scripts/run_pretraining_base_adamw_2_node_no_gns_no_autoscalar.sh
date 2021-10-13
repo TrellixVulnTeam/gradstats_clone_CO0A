@@ -29,6 +29,8 @@ num_gpus=${4:-8}
 warmup_proportion=${5:-"0.2843"}
 train_steps=${6:-7038}
 save_checkpoint_steps=${7:-8000}
+save_checkpoint_steps=${7:-2000}
+
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}

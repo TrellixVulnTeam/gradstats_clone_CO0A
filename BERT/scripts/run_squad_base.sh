@@ -14,25 +14,26 @@
 # limitations under the License.
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
-source /shared/conda/bin/activate /shared/conda/envs/adascale_bert/
+source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
 
-code_dir="/shared/scaling_without_tuning/BERT_adascale/"
+code_dir="/fsx/code/gradstats/BERT"
 #init_checkpoint=${1:-"$code_dir/results/pretrain_base_4/checkpoints/ckpt_8601.pt"}
-init_checkpoint=${1:-"$code_dir/results/pretrain_base_adamw_8node_gns_autoamp_precond/checkpoints/ckpt_5697.pt"} 
+init_checkpoint=${1:-"$code_dir/results/pretrain_base_2node_adam/checkpoints/ckpt_8601.pt"} 
 # init_checkpoint="/shared/scaling_without_tuning/BERT/results/pretrain_base_adamw_4node_gns_autoamp_precond/checkpoints/ckpt_8601.pt"
 # checkpoints/ckpt_7038.pt"}
-epochs=${2:-"2.0"}
-batch_size=${3:-"4"}
-learning_rate=${4:-"3e-5"}
-precision=${5:-"fp16"}
-num_gpu=${6:-"8"}
-seed=${7:-"1"}
-squad_dir=${8:-"/shared/data/nlp/SQUAD/download/squad/v1.1"}
-vocab_file=${9:-"/shared/data/nlp/SQUAD/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
-OUT_DIR=${10:-"/shared/scaling_without_tuning/BERT/results/SQuAD_adascale_128K_debug"}
+RESULTS_DIR=${2:-"/fsx/code/gradstats/BERT/results/pretrain_base_2node_adam"}
+epochs=${3:-"2.0"}
+batch_size=${4:-"4"}
+learning_rate=${5:-"3e-5"}
+precision=${6:-"fp16"}
+num_gpu=${7:-"8"}
+seed=${8:-"1"}
+squad_dir=${9:-"/fsx/data/nlp/SQUAD/download/squad/v1.1"}
+vocab_file=${10:-"/fsx/data/nlp/SQUAD/download/google_pretrained_weights/uncased_L-24_H-1024_A-16/vocab.txt"}
 mode=${11:-"train eval"}
-CONFIG_FILE=${12:-"/shared/scaling_without_tuning/BERT/bert_base_config.json"}
+CONFIG_FILE=${12:-"/fsx/code/gradstats/BERT/bert_base_config.json"}
 max_steps=${13:-"-1"}
+OUT_DIR=${14:-"$RESULTS_DIR/finetune"}
 
 echo "out dir is $OUT_DIR"
 mkdir -p $OUT_DIR
@@ -55,7 +56,7 @@ else
   mpi_command=" -m torch.distributed.launch --nproc_per_node=$num_gpu"
 fi
 
-CMD="/shared/conda/envs/adascale_bert/bin/python3  $mpi_command /shared/scaling_without_tuning/BERT/run_squad.py "
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3  $mpi_command /fsx/code/gradstats/BERT/run_squad.py "
 CMD+="--init_checkpoint=$init_checkpoint "
 if [ "$mode" = "train" ] ; then
   CMD+="--do_train "
