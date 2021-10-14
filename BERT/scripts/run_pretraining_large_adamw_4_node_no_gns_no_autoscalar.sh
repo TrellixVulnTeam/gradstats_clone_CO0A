@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
