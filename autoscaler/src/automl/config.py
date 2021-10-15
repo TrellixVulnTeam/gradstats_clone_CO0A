@@ -30,6 +30,7 @@ class AutoScalerConfig:
         self.update_interval = autoscaler_config['update_interval']
         self.precondition_gradients = autoscaler_config['precondition_gradients']
         self.smoothing =  autoscaler_config['smoothing']
+        self.reset_optimizer_state_on_restart = autoscaler_config['reset_optimizer_state_on_restart']
         # self.num_gradients_to_accumulate = autoscaler_config['num_gradients_to_accumulate']
         # assert self.num_gradients_to_accumulate >= 1, "Must collect a positive integer"
 

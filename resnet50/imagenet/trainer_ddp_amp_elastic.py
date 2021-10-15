@@ -480,8 +480,7 @@ def main_worker(args):
     collate_fn = lambda b: fast_collate(b, memory_format)
 
     if args.distributed:
-        # seed should be time dependendent for elastic training
-        SEED = int(100 * time.time() % 199)
+        SEED = 199 * get_rank() + int(100 * time.time() % 199)
         train_sampler = ReplacementDistributedSampler(train_dataset, seed=SEED)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
     else:
@@ -754,7 +753,11 @@ def validate(val_loader, model, criterion, writer, epoch, args):
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        # print(type(acc1), type(acc5[0]), acc1)
+
+        if get_rank() == 0:
+            print("ACC1 AT 0 BEFORE REDUCE:", acc1)
+
+
         # average across world size
         acc1 = reduce_tensor(acc1)
         acc5 = reduce_tensor(acc5)

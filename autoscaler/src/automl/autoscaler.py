@@ -69,6 +69,8 @@ class AdaScale(Optimizer):
         self._cluster_state_path = f'{logs_basedir}/GNS'
         make_path_if_not_exists(self._cluster_state_path)
 
+        # boolean indicating if we should reset base optimizer state when cluster is resized
+        self._reset_optimizer_state_on_restart = self.cfg.reset_optimizer_state_on_restart
         # boolean indicating if accumulation already takes care of accum division in
         # main training loop
         self._adjust_grads_for_accumulation = self.cfg.adjust_gradients_for_accumulation
@@ -95,9 +97,8 @@ class AdaScale(Optimizer):
         # also used for adjusting temperature for gns predictions
         self._current_batch_size = self._scale_one_batch_size * self._scale # self._num_grad_samples
 
-        #TODO: customize configuration based on scale if file present
-
-        self._max_grad_norm = self.cfg.max_grad_norm
+        #HACK: Replace with adaptive scheme if this helps
+        self._max_grad_norm = self.cfg.max_grad_norm if self._scale > 8 else 0.0
         self._batch_size_upper_limit = self.cfg.batch_size_upper_limit
         assert self._current_batch_size <= self._batch_size_upper_limit
 
@@ -691,12 +692,13 @@ class AdaScale(Optimizer):
                     self._temperature *= curr_temperature_ratio / self._temperature_ratio
                     self._temperature_ratio = curr_temperature_ratio
         res = None
+        self._clipnorm = 0.0
         # Step it.
         if self._scaler:
             if self._max_grad_norm > 0.0:
                 # Google BERT uses grad norm clipping with Adam optimizer
                 self._scaler.unscale_(self._optimizer)
-                norm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=self._max_grad_norm)
+                self._clipnorm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=self._max_grad_norm)
             res = self._scaler.step(self._optimizer)
         else:
             self._optimizer.step(*args, **kwargs)
@@ -763,13 +765,21 @@ class AdaScale(Optimizer):
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         for k, v in  data['state']['adascale'].items():
+            if self._reset_optimizer_state_on_restart:
+                if k in ["grad_sqr_avg", "grad_var_avg"]:
+                    print("!!! Resetting autoscaler state !!!")
+                    continue
             adascale_state[k] = v
         prev_scale = adascale_state['scale']
         # adjust for current scale here
         self._adjust_variance(prev_scale)
 
         if self._enable_debug:
-            print(f"{time.time()}-{self._rank}, IN AUTOSCALER RESTORED SI {adascale_state['scale_invariant_steps']}")
+            print(f"{time.time()}-{self._rank}, IN AUTOSCALER RESTORED SI {adascale_state['scale_invariant_steps']}, {adascale_state['grad_sqr_avg']}, {adascale_state['grad_var_avg']}")
+        if self._reset_optimizer_state_on_restart:
+            # reset base optimizer momentum and preconditioning buffers
+            print("!!! Resetting base optimizer state !!!")
+            return # no-op do not load ckpt_state_dict['optimizer']
         return self._optimizer.load_state_dict(data)
 
 
@@ -809,10 +819,13 @@ class AdaScale(Optimizer):
         # self._summary_writer.add_scalar('Train/allreduced_grad_sqr', self.total_grad_sqr[0], scale_invariant_steps)
         # self._summary_writer.add_scalar('Train/local_grad_sqr', self.local_grad_sqr[0]/self._num_grad_samples, scale_invariant_steps)
         self._summary_writer.add_scalar('Train/GNS_si', self._gns, scale_invariant_steps)
+        self._summary_writer.add_scalar('Train/clipnorm', self._clipnorm, scale_invariant_steps)
+
         # plot real iterations here
-        self._summary_writer.add_scalar('Train/var', self._var, real_iteration)
-        self._summary_writer.add_scalar('Train/sqr', self._sqr, real_iteration)
-        self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
+        if self._enable_debug:
+            self._summary_writer.add_scalar('Train/var', self._var, real_iteration)
+            self._summary_writer.add_scalar('Train/sqr', self._sqr, real_iteration)
+            self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
         self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
 
 
