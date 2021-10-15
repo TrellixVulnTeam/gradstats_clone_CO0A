@@ -134,6 +134,7 @@ class AdamW(Optimizer):
                 # record the step after step update
                 state_steps.append(state['step'])
 
+            #FIXME: THIS IS NOT CORRECT WHEN WE HAVE MULTIPLE GROUPS
             denoms = F.adamw(params_with_grad,
                     grads,
                     exp_avgs,
