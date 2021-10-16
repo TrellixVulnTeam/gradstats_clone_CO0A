@@ -283,11 +283,11 @@ class Sc4l3rDaemon(Daemon):
             'mzanur-eks-g4-use1b',
             'worker-g4-ng',
             'mzanur-autoscaler',
-            'r50_elastic_fix_1',
+            'r50_elastic_momentum_1',
             base_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job_template.yaml',
             out_yaml='/home/ubuntu/workspace/gradstats/eks/yaml/g4/resnet50/elastic/r50_elastic_training_job.yaml',
             nodestate_file='/home/ubuntu/workspace/gradstats/eks/service/node_state',
-            etcd_addr="10.100.9.93",
+            etcd_addr="10.100.34.17",
             min_nodes=2, # 1, #FIXME: S=1 gns is broken(?)
             max_nodes=16,
             gpus_per_node=4,
