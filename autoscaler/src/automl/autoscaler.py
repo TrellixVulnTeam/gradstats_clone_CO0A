@@ -153,9 +153,9 @@ class AdaScale(Optimizer):
             if self._is_adaptive:
                 # adjust beta1 according to scale
                 for pg_idx, param_group in enumerate(self._optimizer.param_groups):
-                    beta1, _ = param_group['betas']
+                    beta1, beta2 = param_group['betas']
                     adjusted_beta1 = 1 - (1-beta1)/self._scale
-                    self._optimizer.param_groups[pg_idx]['betas'][0] = adjusted_beta1
+                    self._optimizer.param_groups[pg_idx]['betas'] = (adjusted_beta1, beta2)
                     print("ADJUSTED BETA1 TO", adjusted_beta1)
 
         # Adding for O2 level of AMP
