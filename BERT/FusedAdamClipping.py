@@ -1,4 +1,6 @@
 from apex.optimizers import FusedLAMB, FusedAdam
+import torch
+from apex.multi_tensor_apply import multi_tensor_applier
 
 class FusedAdamClipping(FusedAdam):
 
