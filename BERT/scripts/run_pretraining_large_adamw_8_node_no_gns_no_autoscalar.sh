@@ -2,7 +2,7 @@
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
 # conda env 
-source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
+source /fsx/conda/bin/activate /fsx/conda/envs/pytorch_latest_p37_fsx
 
 train_batch_size=${1:-1024}
 learning_rate=${2:-"1.3653e-3"}
@@ -152,7 +152,7 @@ export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
  
  
-CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 #CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 - $CMD"
 
@@ -242,7 +242,7 @@ echo "finished pretraining"
  CMD+=" --bucket ${BUCKET} "
 
 
- CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
+ CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
  if [ "$create_logfile" = "true" ] ; then
    export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
