@@ -1,9 +1,8 @@
 from apex.optimizers import FusedLAMB, FusedAdam
 
-
 class FusedAdamClipping(FusedAdam):
 
-	def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None):
+    def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None):
         """Performs a single optimization step.
         Arguments:
             closure (callable, optional): A closure that reevaluates the model
@@ -11,7 +10,7 @@ class FusedAdamClipping(FusedAdam):
         The remaining arguments are deprecated, and are only retained (for the moment) for error-checking purposes.
         """
         
-		max_grad_norm = 1.0
+        max_grad_norm = 1.0
         if any(p is not None for p in [grads, output_params, scale, grad_norms]):
             raise RuntimeError('FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
         loss = None
