@@ -39,6 +39,7 @@ from tokenization import BertTokenizer
 import modeling
 from apex.optimizers import FusedLAMB, FusedAdam
 from schedulers import PolyWarmUpScheduler
+from FusedAdamClipping import FusedAdamClipping
 
 from file_utils import PYTORCH_PRETRAINED_BERT_CACHE
 from utils import is_main_process, format_step, get_world_size, get_rank, upload_dir
@@ -589,7 +590,7 @@ def prepare_model_and_optimizer(args, device):
                       betas=(args.adamw_beta1, args.adamw_beta2),
                       eps=args.adamw_eps,
                       adam_w_mode=True)
-                
+
         # optimizer = FusedAdam(optimizer_grouped_parameters,
         #                       lr=args.learning_rate,
         #                       betas=(args.adamw_beta1, args.adamw_beta2),
