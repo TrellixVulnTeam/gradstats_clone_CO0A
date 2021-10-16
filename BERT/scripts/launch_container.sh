@@ -1,3 +1,4 @@
+# Container
 
 ACCOUNT=763104351884
 REGION=us-east-1
@@ -27,5 +28,6 @@ docker run --runtime=nvidia --gpus 8  \
 
 docker exec -it ${CONTAINER_NAME} bash -c "pip install nltk html2text progressbar onnxruntime git+https://github.com/NVIDIA/dllogger" 
 docker exec -it ${CONTAINER_NAME} bash -c  "pip install tqdm tensorboard yacs"
+
 
 

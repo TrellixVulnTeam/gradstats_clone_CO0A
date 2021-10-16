@@ -61,6 +61,9 @@ class FusedAdamClipping(FusedAdam):
                 else:
                     raise RuntimeError('FusedAdam only support fp16 and fp32.')
 
+            torch.nn.utils.clip_grad_norm_(g_16, max_grad_norm)
+            torch.nn.utils.clip_grad_norm_(g_32, max_grad_norm)
+
             if(len(g_16) > 0):
                 multi_tensor_applier(self.multi_tensor_adam,
                                      self._dummy_overflow_buf,
@@ -72,8 +75,7 @@ class FusedAdamClipping(FusedAdam):
                                      group['step'],
                                      self.adam_w_mode,
                                      bias_correction,
-                                     group['weight_decay'],
-                                     max_grad_norm,)
+                                     group['weight_decay'])
             if(len(g_32) > 0):
                 multi_tensor_applier(self.multi_tensor_adam,
                                      self._dummy_overflow_buf,
@@ -85,8 +87,7 @@ class FusedAdamClipping(FusedAdam):
                                      group['step'],
                                      self.adam_w_mode,
                                      bias_correction,
-                                     group['weight_decay'],
-                                     max_grad_norm)
+                                     group['weight_decay'])
 
 
         return loss
