@@ -583,11 +583,18 @@ def prepare_model_and_optimizer(args, device):
             'weight_decay':
             0.0
         }]
-        optimizer = FusedAdam(optimizer_grouped_parameters,
-                              lr=args.learning_rate,
-                              betas=(args.adamw_beta1, args.adamw_beta2),
-                              eps=args.adamw_eps,
-                              adam_w_mode=True)
+        
+        optimizer = FusedAdamClipping(optimizer_grouped_parameters,
+                      lr=args.learning_rate,
+                      betas=(args.adamw_beta1, args.adamw_beta2),
+                      eps=args.adamw_eps,
+                      adam_w_mode=True)
+                
+        # optimizer = FusedAdam(optimizer_grouped_parameters,
+        #                       lr=args.learning_rate,
+        #                       betas=(args.adamw_beta1, args.adamw_beta2),
+        #                       eps=args.adamw_eps,
+        #                       adam_w_mode=True)
     else:
         optimizer_grouped_parameters = [{
             'params': [
