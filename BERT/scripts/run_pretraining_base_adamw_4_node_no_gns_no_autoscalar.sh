@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Runs phase 1 pretraining on 2 node and phase 2 pretraining on 4 node
 
 # echo "Container nvidia build = " $NVIDIA_BUILD_ID
