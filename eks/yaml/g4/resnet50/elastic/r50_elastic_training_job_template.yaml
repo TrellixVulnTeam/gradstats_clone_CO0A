@@ -1,7 +1,7 @@
 apiVersion: elastic.pytorch.org/v1alpha1
 kind: ElasticJob
 metadata:
-  name: "r50-elastic-fix-1-autoscaler-job"
+  name: "r50-elastic-momentum-1-autoscaler-job"
   namespace: elastic-job
 spec:
   # Use "etcd-service:2379" if you already apply etcd.yaml
@@ -39,7 +39,7 @@ spec:
                 - "--arch=resnet50"
                 - "/shared/benchmarking_datasets/imagenet/processed"
                 - "--batch-size=64"
-                - "--workers=4"
+                - "--workers=8"
                 - "--amp"
                 - "--run-gns-experiment"
                 - "--optimizer=AdamW"
@@ -48,7 +48,7 @@ spec:
                 - "--enable-autoscaler"
                 - "--epochs=90"
                 - "--channels-last"
-                - "--label=r50_elastic_fix_1"
+                - "--label=r50_elastic_momentum_1"
               resources:
                 limits:
                   nvidia.com/gpu: 4
