@@ -157,26 +157,26 @@ export NCCL_DEBUG=INFO
 CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 
-# if [ "$create_logfile" = "true" ] ; then
-#   export GBS=$(expr $train_batch_size \* $num_gpus)
-#   printf -v TAG "pyt_bert_pretraining_phase1_%s_gbs%d" "$precision" $GBS
-#   DATESTAMP=`date +'%y%m%d%H%M%S'`
-#   LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
-#   printf "Logs written to %s\n" "$LOGFILE"
-# fi
+ if [ "$create_logfile" = "true" ] ; then
+   export GBS=$(expr $train_batch_size \* $num_gpus)
+   printf -v TAG "pyt_bert_pretraining_phase1_%s_gbs%d" "$precision" $GBS
+   DATESTAMP=`date +'%y%m%d%H%M%S'`
+   LOGFILE=$RESULTS_DIR/$job_name.$TAG.$DATESTAMP.log
+   printf "Logs written to %s\n" "$LOGFILE"
+ fi
 
-# set -x
-# if [ -z "$LOGFILE" ] ; then
-#    $CMD
-# else
-#    (
-#      $CMD
-#    ) |& tee $LOGFILE
-# fi
+ set -x
+ if [ -z "$LOGFILE" ] ; then
+    $CMD
+ else
+    (
+      $CMD
+    ) |& tee $LOGFILE
+ fi
 
-# set +x
+ set +x
 
-# echo "finished pretraining"
+ echo "finished pretraining"
 
 #Start Phase2
 
