@@ -1,6 +1,6 @@
 autoscaler:
   model_name: "resnet50"
-  training_label: "r50_elastic_momentum_1"
+  training_label: "r50_elastic_sharded_1"
   s3_bucket: "mzanur-autoscaler"
   log_dir: "/shared/export/logs"
   enable_debug: Off
@@ -18,7 +18,7 @@ adascale:
   is_adaptive: True
   use_pt_adam: True
   max_grad_norm: 5.0
-  adjust_momentum: True
+  adjust_momentum: False
 gradient_noise_scale:
   batch_size_upper_limit: .Inf
   scale_one_batch_size: 256

@@ -1,7 +1,7 @@
 apiVersion: elastic.pytorch.org/v1alpha1
 kind: ElasticJob
 metadata:
-  name: "r50-elastic-momentum-1-autoscaler-job"
+  name: "r50-elastic-sharded-1-autoscaler-job"
   namespace: elastic-job
 spec:
   # Use "etcd-service:2379" if you already apply etcd.yaml
@@ -34,8 +34,8 @@ spec:
                 value: "48"
               args:
                 - "--nproc_per_node=4"
-                - "/gradstats/resnet50/imagenet/trainer_ddp_amp_elastic.py"
-                # - "/gradstats/resnet50/imagenet/trainer_elastic_sharded.py"
+                # - "/gradstats/resnet50/imagenet/trainer_ddp_amp_elastic.py"
+                - "/gradstats/resnet50/imagenet/trainer_elastic_sharded.py"
                 - "--arch=resnet50"
                 - "/shared/benchmarking_datasets/imagenet/processed"
                 - "--batch-size=64"
@@ -48,7 +48,7 @@ spec:
                 - "--enable-autoscaler"
                 - "--epochs=90"
                 - "--channels-last"
-                - "--label=r50_elastic_momentum_1"
+                - "--label=r50_elastic_sharded_1"
               resources:
                 limits:
                   nvidia.com/gpu: 4
