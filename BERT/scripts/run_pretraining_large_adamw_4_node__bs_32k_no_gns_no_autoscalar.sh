@@ -5,7 +5,7 @@
 source /fsx/conda/bin/activate /fsx/conda/envs/pytorch_latest_p37_fsx
 
 train_batch_size=${1:-1024}
-learning_rate=${2:-"5.9415-5"}
+learning_rate=${2:-"5.9415e-5"}
 adamw_beta1=0.934271
 adamw_beta2=0.989295
 adamw_weight_decay=0.31466
@@ -22,8 +22,8 @@ create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-32}
 seed=${12:-12439}
-job_name=${13:-"pretrain_large_8node_adam"}
-LABEL=pretrain_large_8node_adam_32k
+job_name=${13:-"pretrain_large_4node_adam_32k"}
+LABEL=pretrain_large_4node_adam_32k
 allreduce_post_accumulation=${14:-"true"}
 #allreduce_post_accumulation=${14:-"false"}
 allreduce_post_accumulation_fp16=${15:-"true"}
