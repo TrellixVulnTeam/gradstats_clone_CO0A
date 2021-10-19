@@ -58,7 +58,8 @@ CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
 RESULTS_DIR=$CODEDIR/results/pretrain_base_8_4node
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
- 
+TB_DIR=$RESULTS_DIR/tensorboard
+BUCKET=mansmane-us-west-2
 mkdir -p $CHECKPOINTS_DIR
  
  

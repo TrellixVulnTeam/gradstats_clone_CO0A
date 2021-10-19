@@ -22,7 +22,7 @@ create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-32}
 seed=${12:-12439}
-job_name=${13:-"bert_adamw_pretraining"}
+job_name=${13:-"pretrain_large_8node_adam"}
 allreduce_post_accumulation=${14:-"true"}
 #allreduce_post_accumulation=${14:-"false"}
 allreduce_post_accumulation_fp16=${15:-"true"}
@@ -44,7 +44,8 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=//home/ubuntu/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_large_4node_adam
+LABEL=pretrain_large_8node_adam
+RESULTS_DIR=$CODEDIR/results/${LABEL}
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 TB_DIR=$RESULTS_DIR/tensorboard
 BUCKET=mansmane-us-west-2
@@ -138,7 +139,8 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 TB_DIR=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
 CMD+=" --bucket ${BUCKET} "
- 
+CMD+=" --label ${LABEL} "
+
 # # set up environment variables for Torch DistributedDataParallel
 WORLD_SIZE=$SLURM_NTASKS
 RANK=$SLURM_NODEID
@@ -240,6 +242,7 @@ echo "finished pretraining"
  CMD+=" --json-summary ${RESULTS_DIR}/dllogger2.json "
  CMD+=" --log_dir ${TB_DIR} "
  CMD+=" --bucket ${BUCKET} "
+ CMD+=" --label ${LABEL} "
 
 
  CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"

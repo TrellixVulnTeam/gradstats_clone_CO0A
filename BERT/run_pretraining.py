@@ -946,25 +946,26 @@ def main():
                                     "effective_lr": learning_rate * gain,
                                     "scale_invariant_steps": adascale_step
                                 })
-                        # for all workers log tensorboard summary
-                        writer.add_scalar('Train/Real Iterations', global_step, adascale_step)
-                        writer.add_scalar('Train/Loss', average_loss, adascale_step)
-                        writer.add_scalar('Train/Learning Rate', learning_rate, adascale_step)
-                        writer.add_scalar('Train/Gain', gain, adascale_step)
-                        if args.use_adascale:
-                            writer.add_scalar('Train/var', optimizer.nonsmooth_var[0], adascale_step)
-                            writer.add_scalar('Train/sqr', optimizer.nonsmooth_sqr[0], adascale_step)
-                            writer.add_scalar('Train/var_smooth', optimizer.var, adascale_step)
-                            writer.add_scalar('Train/sqr_smooth', optimizer.sqr, adascale_step)
-                            # only logging the first param group
-                            writer.add_scalar('Train/allreduced_grad_sqr', optimizer.total_grad_sqr[0],
-                                                adascale_step)
-                            writer.add_scalar('Train/local_grad_sqr', optimizer.local_grad_sqr[0],
-                                                adascale_step)
-                        writer.add_scalar('Train/GNS', gns, adascale_step)
-                        writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
-                        writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
-                        writer.flush()
+
+                            # Only for main process log tensorboard summary
+                            writer.add_scalar('Train/Real Iterations', global_step, adascale_step)
+                            writer.add_scalar('Train/Loss', average_loss, adascale_step)
+                            writer.add_scalar('Train/Learning Rate', learning_rate, adascale_step)
+                            writer.add_scalar('Train/Gain', gain, adascale_step)
+                            if args.use_adascale:
+                                writer.add_scalar('Train/var', optimizer.nonsmooth_var[0], adascale_step)
+                                writer.add_scalar('Train/sqr', optimizer.nonsmooth_sqr[0], adascale_step)
+                                writer.add_scalar('Train/var_smooth', optimizer.var, adascale_step)
+                                writer.add_scalar('Train/sqr_smooth', optimizer.sqr, adascale_step)
+                                # only logging the first param group
+                                writer.add_scalar('Train/allreduced_grad_sqr', optimizer.total_grad_sqr[0],
+                                                    adascale_step)
+                                writer.add_scalar('Train/local_grad_sqr', optimizer.local_grad_sqr[0],
+                                                    adascale_step)
+                            writer.add_scalar('Train/GNS', gns, adascale_step)
+                            writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
+                            writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
+                            writer.flush()
                         # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
                         if training_steps % 10 == 0:
                             # update the tensorboard log in s3 bucket
