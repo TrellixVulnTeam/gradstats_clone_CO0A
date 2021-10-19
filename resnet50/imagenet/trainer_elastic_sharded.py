@@ -17,7 +17,10 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from with_replacement_sampler import ReplacementDistributedSampler
+
+# from with_replacement_sampler import ReplacementDistributedSampler
+from torch.distributed.elastic.utils.data import ElasticDistributedSampler
+
 import numpy as np
 from automl.autoscaler import AdaScale
 from automl.optim.adamw import AdamW
@@ -131,6 +134,11 @@ def parse_arguments():
                         default=False,
                         action='store_true',
                         help="Enable mixed precision training")
+
+    parser.add_argument('--use_preconditioner',
+                        default=False,
+                        action='store_true',
+                        help='condition gradients with moving average stats')
 
     parser.add_argument('--autoscaler-cfg-path',
                         default="/gradstats/resnet50/imagenet/autoscaler.yaml",
@@ -475,8 +483,10 @@ def main_worker(args):
     collate_fn = lambda b: fast_collate(b, memory_format)
 
     if args.distributed:
-        SEED = 199 * get_rank() + int(100 * time.time() % 199)
-        train_sampler = ReplacementDistributedSampler(train_dataset, seed=SEED)
+        # seed should be time dependendent for elastic training
+        SEED = int(100 * time.time() % 199)
+        # train_sampler = ReplacementDistributedSampler(train_dataset, seed=SEED)
+        train_sampler = ElasticDistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
     else:
         train_sampler = None
@@ -614,7 +624,10 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
  
     effective_world_size = get_world_size() * args.gradient_accumulation_steps
     scale_one_gbs = int(args.batch_size * effective_world_size // optimizer.scale)
-    scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_gbs)
+    # SAMPLING WITH REPLACEMENT
+    # scale_one_steps_per_epoch = int(len(train_loader) * args.batch_size // scale_one_gbs)
+    scale_one_ws = scale_one_gbs // args.batch_size
+    scale_one_steps_per_epoch = int(len(train_loader) * get_world_size() // scale_one_ws)
 
     print("==>", effective_world_size, len(train_loader), scale_one_gbs, scale_one_steps_per_epoch, global_step)
 
@@ -633,14 +646,20 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
     total_steps = 90 * scale_one_steps_per_epoch
     accumulate_gradients = args.gradient_accumulation_steps > 1
     curr_epoch_step = 0 # only to track grad accumulation related stuff
+    is_last_accumulation_step = False
+    # adjust total steps per epoch for grad accum
+    max_steps = len(train_loader)
+    remainder = len(train_loader) % args.gradient_accumulation_steps
+    max_steps -= remainder
+        
     while images is not None:
         state.global_step = global_step
         curr_epoch_step += 1
         ###### DEBUG ########
         # scale_one_steps_per_epoch = 100
         #####################
-        # data scheme is sampling with replacement, scale_one_steps should be invariant for all scales
-        if i >= scale_one_steps_per_epoch:
+        # print('***', i, curr_epoch_step, '***')
+        if curr_epoch_step > max_steps:
             break
 
         # measure data loading time
@@ -722,6 +741,12 @@ def train(train_loader, model, criterion, optimizer, scaler, writer, epoch, stat
                         optimizer.check_for_cluster_resize()
                     writer.flush()
         images, target = prefetcher.next()
+    # if we ended at a point where training pipeline ran out before we called final step for grad accum then we force a sync to allow autoscaler to checkpoint
+    if not is_last_accumulation_step:
+        #  3734 5008 False 2
+        print('>>>>>>>>>', i, scale_one_steps_per_epoch, is_last_accumulation_step, args.gradient_accumulation_steps)
+        if args.enable_autoscaler:
+            optimizer.step()
 
 
 def validate(val_loader, model, criterion, writer, epoch, args):
@@ -748,11 +773,7 @@ def validate(val_loader, model, criterion, writer, epoch, args):
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-        if get_rank() == 0:
-            print("ACC1 AT 0 BEFORE REDUCE:", acc1)
-
-
+        # print(type(acc1), type(acc5[0]), acc1)
         # average across world size
         acc1 = reduce_tensor(acc1)
         acc5 = reduce_tensor(acc5)
