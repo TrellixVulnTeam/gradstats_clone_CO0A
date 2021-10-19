@@ -61,14 +61,15 @@ class FusedAdamClipping(FusedAdam):
                 else:
                     raise RuntimeError('FusedAdam only support fp16 and fp32.')
 
-            print("### g_16 before clip:", g_16)
-            print("### g_32 before clip:", g_32)
-
+            # print("### g_16 before clip:", g_16)
+            # print("### g_32 before clip:", g_32)
+            print("### g_16.shape: ", g_16.shape)
+            print("### g_32.shape: ", g_32.shape)
             torch.nn.utils.clip_grad_norm_(g_16, max_grad_norm)
             torch.nn.utils.clip_grad_norm_(g_32, max_grad_norm)
 
-            print("### g_16 After clip:", g_16)
-            print("### g_32 After clip:", g_32)
+            # print("### g_16 After clip:", g_16)
+            # print("### g_32 After clip:", g_32)
 
             if(len(g_16) > 0):
                 multi_tensor_applier(self.multi_tensor_adam,
