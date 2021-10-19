@@ -67,12 +67,16 @@ class FusedAdamClipping(FusedAdam):
             for ele in g_16:
                 print("g16_ele ", ele)
             print("### g_32.shape: ", len(g_32))
-             for ele in g_32:
+            for ele in g_32:
                 print("g32_ele ", ele)
             torch.nn.utils.clip_grad_norm_(g_16, max_grad_norm)
             torch.nn.utils.clip_grad_norm_(g_32, max_grad_norm)
+            print("After appliciaton")
+            for ele in g_16:
+                print("g16_ele ", ele)
+            for ele in g_32:
+                print("g32_ele ", ele)
 
-            
             # print("### g_16 After clip:", g_16)
             # print("### g_32 After clip:", g_32)
 
