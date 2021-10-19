@@ -136,7 +136,8 @@ CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
 CMD+=" $INIT_CHECKPOINT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
-TB_DIR=$RESULTS_DIR/tensorboard_phase2
+TB_DIR=$RESULTS_DIR/tensorboard_phase1
+TB_DIR2=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
 CMD+=" --bucket ${BUCKET} "
 CMD+=" --label ${LABEL} "
@@ -179,9 +180,9 @@ fi
 set +x
 
 echo "finished pretraining"
-
-#Start Phase2
-
+###################
+# Start Phase2 ###
+###################
  precision="fp16"
 
  PREC=""
@@ -240,7 +241,7 @@ echo "finished pretraining"
  CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
  CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
  CMD+=" --json-summary ${RESULTS_DIR}/dllogger2.json "
- CMD+=" --log_dir ${TB_DIR} "
+ CMD+=" --log_dir ${TB_DIR2} "
  CMD+=" --bucket ${BUCKET} "
  CMD+=" --label ${LABEL} "
 
