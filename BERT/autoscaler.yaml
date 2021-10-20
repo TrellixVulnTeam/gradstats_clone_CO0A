@@ -2,7 +2,7 @@ autoscaler:
   model_name: "BERT-large"
   training_label: "bert_large_elastic"
   s3_bucket: "mzanur-autoscaler"
-  log_dir: "/shared/export/logs"
+  log_dir: "/home/ubuntu/workspace/autoscaler_logs"
   enable_debug: Off
   collect_tensorboard: On
   world_size: 0
@@ -12,14 +12,15 @@ autoscaler:
   precondition_gradients: On
   gradient_accumulation_supported: True
   adjust_gradients_for_accumulation: False
-  smoothing: null
+  smoothing: 0.1
 adascale:
   aggressive_schedule: Off
   is_adaptive: True
   use_pt_adam: False
-  max_grad_norm: 1.0
+  max_grad_norm: 5.0
   adjust_momentum: False
 gradient_noise_scale:
   batch_size_upper_limit: .Inf
-  scale_one_batch_size: 32768 
-  scale_one_world_size: 8
+  scale_one_batch_size: 32768
+  # scale one world size = 8 gpus X 64 gradient accumulation steps
+  scale_one_world_size: 512

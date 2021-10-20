@@ -154,6 +154,64 @@ class BertPretrainingCriterion(torch.nn.Module):
         return total_loss
 
 
+class State:
+    """
+    Container for objects that we want to checkpoint. Represents the
+    current "state" of the worker. This object is mutable.
+    """
+
+    def __init__(self, arch, model, optimizer):
+        self.epoch = -1
+        self.best_acc1 = 0
+        self.arch = arch
+        self.model = model
+        self.optimizer = optimizer
+        self.global_step = 0
+
+    def capture_snapshot(self):
+        """
+        Essentially a ``serialize()`` function, returns the state as an
+        object compatible with ``torch.save()``. The following should work
+        ::
+
+        snapshot = state_0.capture_snapshot()
+        state_1.apply_snapshot(snapshot)
+        assert state_0 == state_1
+        """
+        return {
+            "epoch": self.epoch,
+            "best_acc1": self.best_acc1,
+            "arch": self.arch,
+            "state_dict": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "global_step": self.global_step
+        }
+
+    def apply_snapshot(self, obj, device_id):
+        """
+        The complimentary function of ``capture_snapshot()``. Applies the
+        snapshot object that was returned by ``capture_snapshot()``.
+        This function mutates this state object.
+        """
+        self.epoch = obj["epoch"]
+        self.best_acc1 = obj["best_acc1"]
+        self.state_dict = obj["state_dict"]
+        self.model.load_state_dict(obj["state_dict"])
+        self.optimizer.load_state_dict(obj["optimizer"])
+        self.global_step = obj["global_step"]
+
+    def save(self, f):
+        torch.save(self.capture_snapshot(), f)
+
+    def load(self, f, device_id):
+        # Map model to be loaded to specified single gpu.
+        snapshot = torch.load(f, map_location=f"cuda:{device_id}")
+        self.apply_snapshot(snapshot, device_id)
+
+
+
+
+
 def parse_arguments():
 
     parser = argparse.ArgumentParser()
@@ -178,13 +236,11 @@ def parse_arguments():
                         help="Bert pre-trained model selected in the list: bert-base-uncased, "
                         "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
 
-    parser.add_argument(
-        "--output_dir",
-        default=None,
-        type=str,
-        required=True,
-        help="The output directory where the model checkpoints will be written."
-    )
+    parser.add_argument( "--output_dir",
+                        default=None,
+                        type=str,
+                        required=True,
+                        help="The output directory where the model checkpoints will be written.")
 
     ## Other parameters
     parser.add_argument("--init_checkpoint",
@@ -192,20 +248,17 @@ def parse_arguments():
                         type=str,
                         help="The initial checkpoint to start training from.")
 
-    parser.add_argument(
-        "--max_seq_length",
-        default=512,
-        type=int,
-        help=
-        "The maximum total input sequence length after WordPiece tokenization. \n"
-        "Sequences longer than this will be truncated, and sequences shorter \n"
-        "than this will be padded.")
+    parser.add_argument("--max_seq_length",
+                        default=512,
+                        type=int,
+                        help="The maximum total input sequence length after WordPiece tokenization. \n"
+                        "Sequences longer than this will be truncated, and sequences shorter \n"
+                        "than this will be padded.")
 
-    parser.add_argument(
-        "--max_predictions_per_seq",
-        default=80,
-        type=int,
-        help="The maximum total of masked tokens in input sequence")
+    parser.add_argument("--max_predictions_per_seq",
+                        default=80,
+                        type=int,
+                        help="The maximum total of masked tokens in input sequence")
 
     parser.add_argument("--train_batch_size",
                         default=32,
@@ -374,7 +427,7 @@ def parse_arguments():
                         help='If provided, only run this many steps before exiting')
 
     parser.add_argument('--log_dir',
-                        default='/shared/logs',
+                        default='/home/ubuntu/workspace/logs',
                         type=str,
                         help='log directory path.')
 
@@ -389,7 +442,7 @@ def parse_arguments():
                         help='s3 bucket for tensorboard')
 
     parser.add_argument('--autoscaler-cfg-path',
-                        default="/gradstats/resnet50/imagenet/autoscaler.yaml",
+                        default="/home/ubuntu/workspace/gradstats/BERT/autoscaler.yaml",
                         type=str,
                         help='AutoScaler configuration')
 
@@ -492,15 +545,21 @@ def prepare_model_and_optimizer(args, device):
             ])
         global_step = args.resume_step if not args.init_checkpoint else 0
 
+        # load latest checkpoint
         if not args.init_checkpoint:
-            checkpoint = torch.load(os.path.join(
-                args.output_dir, "ckpt_{}.pt".format(global_step)),
-                                    map_location="cpu")
+            ckpt_path = (os.path.join(args.output_dir, f"ckpt_{global_step}.pt"))
         else:
-            checkpoint = torch.load(args.init_checkpoint, map_location="cpu")
+            ckpt_path = args.init_checkpoint
+        checkpoint = torch.load(ckpt_path, map_location=f"cuda:{device}")
 
         model.load_state_dict(checkpoint['model'], strict=False)
 
+        # differentiate between phase1 and phase2 restart
+        is_this_first_phase2_run = True
+        if checkpoint['phase'] == 2 and args.phase2:
+            is_this_first_phase2_run = False
+
+        ####### TEST IF THIS LOGIC STILL HOLDS FOR ELASTIC ########
         if args.phase2:
             if not args.init_checkpoint and args.phase1_end_step != -1:
                 global_step -= args.phase1_end_step
@@ -519,18 +578,11 @@ def prepare_model_and_optimizer(args, device):
 
     if args.use_adamw:
         optimizer_grouped_parameters = [{
-            'params': [
-                p for n, p in param_optimizer
-                if not any(nd in n for nd in no_decay)
-            ],
-            'weight_decay':
-            args.adamw_weight_decay
-        }, {
-            'params':
-            [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
-            'weight_decay':
-            0.0
-        }]
+            'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+            'weight_decay': args.adamw_weight_decay},
+            {
+            'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay': 0.0}]
         optimizer = FusedAdam(optimizer_grouped_parameters,
                               lr=args.learning_rate,
                               betas=(args.adamw_beta1, args.adamw_beta2),
@@ -538,26 +590,17 @@ def prepare_model_and_optimizer(args, device):
                               adam_w_mode=True)
     else:
         optimizer_grouped_parameters = [{
-            'params': [
-                p for n, p in param_optimizer
-                if not any(nd in n for nd in no_decay)
-            ],
-            'weight_decay':
-            0.01
-        }, {
-            'params':
-            [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
-            'weight_decay':
-            0.0
-        }]
-        optimizer = FusedLAMB(optimizer_grouped_parameters,
-                              lr=args.learning_rate)
+            'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+            'weight_decay': 0.01},
+            {
+            'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay': 0.0}]
+        optimizer = FusedLAMB(optimizer_grouped_parameters, lr=args.learning_rate)
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.fp16)
     args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}'
     writer = SummaryWriter(args.tensorboard_path)
 
-    #if args.use_adascale or args.enable_gns:
     if args.enable_autoscaler:
         optimizer = AdaScale(
             optimizer,
@@ -581,20 +624,25 @@ def prepare_model_and_optimizer(args, device):
     ###############################################################################
     #TODO: Migrate checkpointing functionality to AutoScaler checkpoint State class
     ###############################################################################
+    args.scale_invariant_steps = 0
     if args.resume_from_checkpoint:
         if args.phase2 or args.init_checkpoint:
             keys = list(checkpoint['optimizer']['state'].keys())
             #Override hyperparameters from previous checkpoint
             for key in keys:
                 checkpoint['optimizer']['state'][key]['step'] = global_step
-            for iter, item in enumerate(checkpoint['optimizer']['param_groups']):
-                checkpoint['optimizer']['param_groups'][iter]['step'] = global_step
-                checkpoint['optimizer']['param_groups'][iter]['t_total'] = args.max_steps
-                checkpoint['optimizer']['param_groups'][iter]['warmup'] = args.warmup_proportion
-                checkpoint['optimizer']['param_groups'][iter]['lr'] = args.learning_rate
+            for pg_idx, item in enumerate(checkpoint['optimizer']['param_groups']):
+                checkpoint['optimizer']['param_groups'][pg_idx]['step'] = global_step
+                checkpoint['optimizer']['param_groups'][pg_idx]['t_total'] = args.max_steps
+                checkpoint['optimizer']['param_groups'][pg_idx]['warmup'] = args.warmup_proportion
+                checkpoint['optimizer']['param_groups'][pg_idx]['lr'] = args.learning_rate
         optimizer.load_state_dict(checkpoint['optimizer'])
-        #FIXME: LOAD FROM CKPT like resnet50
-        lr_scheduler.last_epoch=args.scale_invariant_steps
+        if checkpoint['phase'] == 1 or not is_this_first_phase2_run: 
+            lr_scheduler.last_epoch = checkpoint['optimizer']['adascale']['scale_invariant_steps']
+        else:
+            lr_scheduler.last_epoch = 0
+        args.scale_invariant_steps = lr_scheduler.last_epoch
+
         # Restore AMP master parameters
         if args.fp16:
             scaler.load_state_dict(checkpoint['scaler'])
@@ -800,7 +848,6 @@ def main():
                     # take one optimizer step for gradient accumulation steps
                     if training_steps % args.gradient_accumulation_steps == 0:
                         if args.enable_autoscaler:
-                            # put new interface here
                             scheduler_progress = optimizer.get_step_increment()
                             adascale_step += scheduler_progress
                             lr_scheduler.step(step_increment=scheduler_progress)
@@ -892,7 +939,8 @@ def main():
                                             'scaler': scaler.state_dict(),
                                             'files': [f_id] + files,
                                             'epoch': epoch,
-                                            'data_loader': None if adascale_step >= args.max_steps else train_dataloader
+                                            'data_loader': None if adascale_step >= args.max_steps else train_dataloader,
+                                            'phase': 2 if args.phase2 else 1 # using this to differentiate between phase1 and phase2 restarts
                                            }, output_save_file)
 
                                 most_recent_ckpts_paths.append(output_save_file)

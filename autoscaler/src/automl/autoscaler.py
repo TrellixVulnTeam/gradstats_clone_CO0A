@@ -89,6 +89,7 @@ class AdaScale(Optimizer):
         if self._smoothing is None:
             self._smoothing = max(1 - self._num_grad_samples / 1000, 0)
         self._scale_one_batch_size = self.cfg.scale_one_batch_size
+        # IMPORTANT: SCALE WORLD SIZE SHOULD TAKE INTO ACCOUNT ANY GRAD ACCUM STEPS IF DONE FOR S=1
         self._scale_one_world_size = self.cfg.scale_one_world_size
         # compute scale factor (currently integer)
         self._scale = int(self._num_grad_samples // self._scale_one_world_size)
@@ -473,7 +474,6 @@ class AdaScale(Optimizer):
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
 
-
         # Store the local gradient square sums in a tensor colocated with grad
         # This vector is also used for error checking. Whenever it is not None,
         # it means that we are in backward pass.
@@ -791,17 +791,30 @@ class AdaScale(Optimizer):
         ignore batch size predictions initially
         Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
         TODO: Investigate other preconditioners
-        TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam.
-        Older FusedAdam support (slower for getting preconditiner) is available in previous commits.
         """
         if self._real_iterations < self._MIN_STEPS or \
                 not self._precondition_gradients or \
                 param not in self._optimizer.state:
             return torch.ones_like(param, memory_format=torch.preserve_format)
-        # get current state for param
-        state = self._optimizer.state[param]
-        pinv = state['denom']
-        return pinv
+        elif self._use_pt_adam: # we use our AdamW mod of PT AdamW that caches preconditioner to avoid repeat computation 
+            # get current state for param
+            state = self._optimizer.state[param]
+            pinv = state['denom']
+            return pinv
+        else:
+            # in all other cases use this path - slower #TODO: optimize for step time impact
+            # get current state for param
+            state = self._optimizer.state[param]
+            # get param group settings
+            group = self._optimizer.param_groups[pg_idx]
+            beta1, beta2 = group['betas']
+            step = group['step']
+            self._inner_opt_step = group['step']
+            exp_avg_sq = state["exp_avg_sq"].clone()
+            eps = self._opt_param_group['eps'][pg_idx]
+            bias_correction = 1 - beta2 ** step
+            pinv = (exp_avg_sq / bias_correction).sqrt().add_(eps)
+            return pinv
 
 
     def log_to_tensorboard(self, real_iteration):
