@@ -585,17 +585,17 @@ def prepare_model_and_optimizer(args, device):
             0.0
         }]
         
-        optimizer = FusedAdamClipping(optimizer_grouped_parameters,
-                      lr=args.learning_rate,
-                      betas=(args.adamw_beta1, args.adamw_beta2),
-                      eps=args.adamw_eps,
-                      adam_w_mode=True)
+        # optimizer = FusedAdamClipping(optimizer_grouped_parameters,
+        #               lr=args.learning_rate,
+        #               betas=(args.adamw_beta1, args.adamw_beta2),
+        #               eps=args.adamw_eps,
+        #               adam_w_mode=True)
 
-        # optimizer = FusedAdam(optimizer_grouped_parameters,
-        #                       lr=args.learning_rate,
-        #                       betas=(args.adamw_beta1, args.adamw_beta2),
-        #                       eps=args.adamw_eps,
-        #                       adam_w_mode=True)
+        optimizer = FusedAdam(optimizer_grouped_parameters,
+                              lr=args.learning_rate,
+                              betas=(args.adamw_beta1, args.adamw_beta2),
+                              eps=args.adamw_eps,
+                              adam_w_mode=True)
     else:
         optimizer_grouped_parameters = [{
             'params': [
@@ -689,6 +689,8 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
             # to get loss scale
             optimizer.step()  
         else:
+            scaler.unscale_(optimizer)
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
         # update scaler state machine
         scaler.update()
