@@ -24,7 +24,7 @@ export NCCL_SOCKET_IFNAME=ens5
 export OMP_NUM_THREADS=96
 
 # 64K batch settings for 8 32GB GPUs
-train_batch_size=${1:-8192}
+train_batch_size=${1:-2048}
 learning_rate=${2:-"5.9415e-4"}
 adamw_beta1=0.934271
 adamw_beta2=0.989295
