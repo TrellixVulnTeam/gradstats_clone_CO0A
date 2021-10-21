@@ -436,6 +436,13 @@ def parse_arguments():
                         type=float,
                         default=1.0,
                         help='Batch scaling factor for AdaScale.')
+
+    parser.add_argument('--grad_clipping_norm',
+                        type=float,
+                        default=None,
+                        help='Gradient clipping norm.')
+
+
     #FIXME: make part of checkpoint - hack to do deal with the PVRE reboot stupidity
     parser.add_argument('--scale_invariant_steps',
                         type=float,
@@ -689,8 +696,9 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
             # to get loss scale
             optimizer.step()  
         else:
-            scaler.unscale_(optimizer)
-            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if args.grad_clipping_norm is not None:
+                scaler.unscale_(optimizer)
+                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clipping_norm)
             scaler.step(optimizer)
         # update scaler state machine
         scaler.update()
