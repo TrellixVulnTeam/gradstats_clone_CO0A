@@ -14,6 +14,7 @@
 # limitations under the License.
 
 # setup NCCL to use EFA
+# Trial script for 1 node
 export FI_PROVIDER=efa
 export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
@@ -167,12 +168,13 @@ CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --label bert_training_large_64k_local "
 # # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob
-# WORLD_SIZE=
-# RANK=
 # For EKS we set 8 GPUs per node (pod)
 PROC_PER_NODE=8
-# MASTER_ADDR_JOB=
-# MASTER_PORT_JOB=
+WORLD_SIZE=$SLURM_NTASKS
+RANK=$SLURM_NODEID
+PROC_PER_NODE=8
+MASTER_ADDR_JOB=$SLURM_SUBMIT_HOST
+MASTER_PORT_JOB="12244"
 
 # setup NCCL to use EFA
 export FI_PROVIDER=efa
@@ -181,7 +183,7 @@ export NCCL_DEBUG=INFO
 
 # Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node
 # CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
-CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB}  $CMD"
 
 
 if [ "$create_logfile" = "true" ] ; then
