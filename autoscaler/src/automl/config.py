@@ -39,6 +39,7 @@ class AutoScalerConfig:
         self.max_grad_norm = adascale_config['max_grad_norm']
         self.is_adaptive = adascale_config['is_adaptive']
         self.use_pt_adam = adascale_config['use_pt_adam']
+        self.adjust_momentum = adascale_config['adjust_momentum']
         # self.enable_gns = gns_config['enabled']
         self.batch_size_upper_limit = gns_config['batch_size_upper_limit']
         self.scale_one_batch_size = gns_config['scale_one_batch_size']

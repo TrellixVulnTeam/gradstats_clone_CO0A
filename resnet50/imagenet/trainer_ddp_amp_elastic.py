@@ -132,11 +132,6 @@ def parse_arguments():
                         action='store_true',
                         help="Enable mixed precision training")
 
-    parser.add_argument('--use_preconditioner',
-                        default=False,
-                        action='store_true',
-                        help='condition gradients with moving average stats')
-
     parser.add_argument('--autoscaler-cfg-path',
                         default="/gradstats/resnet50/imagenet/autoscaler.yaml",
                         type=str,

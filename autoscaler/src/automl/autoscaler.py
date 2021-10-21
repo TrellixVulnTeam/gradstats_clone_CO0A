@@ -68,8 +68,11 @@ class AdaScale(Optimizer):
         self._cluster_state_path = f'{logs_basedir}/GNS'
         make_path_if_not_exists(self._cluster_state_path)
 
-        # boolean indicating if we should reset base optimizer state when cluster is resized
+        # (experimental) boolean indicating if we should reset base optimizer state when cluster is resized
         self._reset_optimizer_state_on_restart = self.cfg.reset_optimizer_state_on_restart
+        # (experimental) boolean indicating if we should adjust momentum term `m` or `beta1` when we increase batch size
+        self._adjust_momentum = self.cfg.adjust_momentum
+
         # boolean indicating if accumulation already takes care of accum division in
         # main training loop
         self._adjust_grads_for_accumulation = self.cfg.adjust_gradients_for_accumulation
@@ -145,7 +148,15 @@ class AdaScale(Optimizer):
                 "scale": self._scale
             },
         )
-        
+
+        if self._adjust_momentum:
+            if self._is_adaptive:
+                # adjust beta1 according to scale
+                for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+                    beta1, beta2 = param_group['betas']
+                    adjusted_beta1 = 1 - (1-beta1)/self._scale
+                    self._optimizer.param_groups[pg_idx]['betas'] = (adjusted_beta1, beta2)
+                    print("ADJUSTED BETA1 TO", adjusted_beta1)
 
         # Adding for O2 level of AMP
         self.state = self._optimizer.state
