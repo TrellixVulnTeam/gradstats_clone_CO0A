@@ -356,6 +356,7 @@ def parse_arguments():
                         action='store_true',
                         help="Whether to use gradient checkpointing")
 
+    # This should always be True for elastic training case
     parser.add_argument("--resume_from_checkpoint",
                         default=False,
                         action='store_true',
@@ -506,14 +507,11 @@ def setup_training(args):
     if not args.do_train:
         raise ValueError(" `do_train`  must be True.")
 
-    if not args.resume_from_checkpoint and \
-            os.path.exists(args.output_dir) and \
-            (os.listdir(args.output_dir) and \
-            any([i.startswith('ckpt') for i in os.listdir(args.output_dir)])):
+    if not args.resume_from_checkpoint and os.path.exists(args.output_dir) and \
+            (os.listdir(args.output_dir) and any([i.startswith('ckpt') for i in os.listdir(args.output_dir)])):
         raise ValueError(f"Output directory ({args.output_dir}) already exists and is not empty.")
 
-    if (not args.resume_from_checkpoint
-            or not os.path.exists(args.output_dir)) and is_main_process():
+    if (not args.resume_from_checkpoint or not os.path.exists(args.output_dir)) and is_main_process():
         os.makedirs(args.output_dir, exist_ok=True)
 
     return device, args
@@ -536,41 +534,45 @@ def prepare_model_and_optimizer(args, device):
         global_step = 0
     else:
         if args.resume_step == -1 and not args.init_checkpoint:
-            model_names = [
-                f for f in os.listdir(args.output_dir) if f.endswith(".pt")
-            ]
-            args.resume_step = max([
-                int(x.split('.pt')[0].split('_')[1].strip())
-                for x in model_names
-            ])
+            model_names = [f for f in os.listdir(args.output_dir) if f.endswith(".pt")]
+            if len(model_names) > 0:
+                args.resume_step = max([int(x.split('.pt')[0].split('_')[1].strip()) for x in model_names])
+            else:
+                print('No checkpoint found, resetting step to 0')
+                args.resume_step = 0
+                args.resume_from_checkpoint = False
+
         global_step = args.resume_step if not args.init_checkpoint else 0
 
-        # load latest checkpoint
-        if not args.init_checkpoint:
-            ckpt_path = (os.path.join(args.output_dir, f"ckpt_{global_step}.pt"))
-        else:
-            ckpt_path = args.init_checkpoint
-        checkpoint = torch.load(ckpt_path, map_location=f"cuda:{device}")
-
-        model.load_state_dict(checkpoint['model'], strict=False)
-
-        # differentiate between phase1 and phase2 restart
-        is_this_first_phase2_run = True
-        if checkpoint['phase'] == 2 and args.phase2:
-            is_this_first_phase2_run = False
-
-        ####### TEST IF THIS LOGIC STILL HOLDS FOR ELASTIC ########
-        if args.phase2:
-            if not args.init_checkpoint and args.phase1_end_step != -1:
-                global_step -= args.phase1_end_step
+        if args.resume_from_checkpoint: # a valid checkpoint was found
+            # load latest checkpoint
+            if not args.init_checkpoint:
+                ckpt_path = (os.path.join(args.output_dir, f"ckpt_{global_step}.pt"))
             else:
-                # with AdaScale we don't have a known value for phase1 end step we reset global step to 0
-                global_step = 0
-                args.phase1_end_step = args.resume_step
+                ckpt_path = args.init_checkpoint
+            checkpoint = torch.load(ckpt_path, map_location=device)
+            model.load_state_dict(checkpoint['model'], strict=False)
+            print("checkpoint keys ", checkpoint.keys())
+            
+            # differentiate between phase1 and phase2 restart
+            is_this_first_phase2_run = False
+            if checkpoint['phase'] == 1 and args.phase2:
+                is_this_first_phase2_run = True
+
+            if args.phase2:
+                if not args.init_checkpoint and args.phase1_end_step != -1:
+                    global_step -= args.phase1_end_step
+                elif is_this_first_phase2_run:
+                    # with AdaScale we don't have a known value for phase1 end step we reset global step to 0
+                    global_step = 0
+                    args.phase1_end_step = args.resume_step
+                else:
+                    # here we are resuming a phase2 training
+                    args.phase1_end_step = checkpoint['phase1_end_step']
+                    global_step = args.resume_step - args.phase1_end_step
 
         if is_main_process():
             print("resume step from ", args.resume_step)
-            print("checkpoint keys ", checkpoint.keys())
 
     model.to(device)
     param_optimizer = list(model.named_parameters())
@@ -636,17 +638,21 @@ def prepare_model_and_optimizer(args, device):
                 checkpoint['optimizer']['param_groups'][pg_idx]['t_total'] = args.max_steps
                 checkpoint['optimizer']['param_groups'][pg_idx]['warmup'] = args.warmup_proportion
                 checkpoint['optimizer']['param_groups'][pg_idx]['lr'] = args.learning_rate
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        if checkpoint['phase'] == 1 or not is_this_first_phase2_run: 
-            lr_scheduler.last_epoch = checkpoint['optimizer']['adascale']['scale_invariant_steps']
+        if (not args.phase2) or (not is_this_first_phase2_run):
+            lr_scheduler.last_epoch = checkpoint['optimizer']['state']['adascale']['scale_invariant_steps']
         else:
             lr_scheduler.last_epoch = 0
         args.scale_invariant_steps = lr_scheduler.last_epoch
+
+        # adjust scale invariant steps in the checkpoint (if we reset it to zero for phase 2)
+        checkpoint['optimizer']['state']['adascale']['scale_invariant_steps'] = args.scale_invariant_steps
+        optimizer.load_state_dict(checkpoint['optimizer'])
 
         # Restore AMP master parameters
         if args.fp16:
             scaler.load_state_dict(checkpoint['scaler'])
             optimizer.load_state_dict(checkpoint['optimizer'])
+
     ###############################################################################
 
     if args.local_rank != -1:
@@ -715,7 +721,7 @@ def main():
         average_loss = 0.0  # averaged loss every args.log_freq steps
         epoch = 0
         training_steps = 0
-        adascale_step = args.scale_invariant_steps # RESTORE FROM AUTOSCALER CHECKPOINT
+        adascale_step = args.scale_invariant_steps
         accumulate_gradients = args.gradient_accumulation_steps > 1
 
         pool = ProcessPoolExecutor(1)
@@ -853,24 +859,9 @@ def main():
                             lr_scheduler.step(step_increment=scheduler_progress)
                         else:
                             lr_scheduler.step()
-
                         global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
 
-
-#                            gns = optimizer.gns(scale_one_batch_size=args.scale_one_bs)
-#                        if args.use_adascale:
-#                            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
-#                            prev_steps = math.floor(adascale_step)
-#                            adascale_step = adascale_step + gain
-#                            new_steps = math.floor(adascale_step)
-#                            scale_invariant_steps = new_steps - prev_steps
-#                            lr_scheduler.step(step_increment=scale_invariant_steps)
-#                            # FIXME: For some reason at the first iteration the optimizer lr states do not get synced so force that here
-#                            optimizer._optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']
-#                        else:
-#                            lr_scheduler.step()  # learning rate warmup
-#                        global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
-
+                    learning_rate = optimizer.param_groups[0]['lr']
                     if adascale_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
                         last_num_steps = int(training_steps / args.gradient_accumulation_steps) % args.log_freq
@@ -886,7 +877,6 @@ def main():
                         adascale_step += 1
                     elif training_steps % (args.log_freq * args.gradient_accumulation_steps) == 0:
                         average_loss /= (args.log_freq * divisor)
-                        learning_rate = optimizer.param_groups[0]['lr']
                         if args.enable_autoscaler:
                             gain = optimizer.gain()
                             gns = optimizer.gns()
@@ -907,11 +897,11 @@ def main():
                                     "scale_invariant_steps": adascale_step
                                 })
                         # for all workers log tensorboard summary
-                        # writer.add_scalar('Train/Real Iterations', global_step, adascale_step)
+                        phase = 2 if args.phase2 else 1
                         if get_rank() == 0:
-                            writer.add_scalar('Train/Loss', average_loss, adascale_step)
+                            writer.add_scalar(f'Train{phase}/Loss', average_loss, adascale_step)
                             if args.enable_autoscaler:
-                                optimizer.log_to_tensorboard(adascale_step)
+                                optimizer.log_to_tensorboard(adascale_step, phase)
                             writer.flush()
                         # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
                         if training_steps % 10 == 0:
@@ -940,8 +930,8 @@ def main():
                                             'files': [f_id] + files,
                                             'epoch': epoch,
                                             'data_loader': None if adascale_step >= args.max_steps else train_dataloader,
-                                            'phase': 2 if args.phase2 else 1 # using this to differentiate between phase1 and phase2 restarts
-                                           }, output_save_file)
+                                            'phase': 2 if args.phase2 else 1, # using this to differentiate between phase1 and phase2 restarts
+                                            'phase1_end_step': args.phase1_end_step,}, output_save_file)
 
                                 most_recent_ckpts_paths.append(output_save_file)
                                 if len(most_recent_ckpts_paths) > 30:
