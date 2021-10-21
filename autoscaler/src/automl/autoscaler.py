@@ -48,7 +48,6 @@ class AdaScale(Optimizer):
         self._summary_writer = summary_writer 
         self._scaler = scaler
         # Proxy the param_groups so that `torch.optim.lr_scheduler` can work.
-        self.param_groups = self._optimizer.param_groups
         self.cfg = AutoScalerConfig(autoscaler_cfg_path)
         self._world_size = (self.cfg.world_size if self.cfg.world_size != 0 else 
                                 dist.get_world_size() if dist.is_initialized() else 1) 
@@ -92,6 +91,7 @@ class AdaScale(Optimizer):
         if self._smoothing is None:
             self._smoothing = max(1 - self._num_grad_samples / 1000, 0)
         self._scale_one_batch_size = self.cfg.scale_one_batch_size
+        # IMPORTANT: SCALE WORLD SIZE SHOULD TAKE INTO ACCOUNT ANY GRAD ACCUM STEPS IF DONE FOR S=1
         self._scale_one_world_size = self.cfg.scale_one_world_size
         # compute scale factor (currently integer)
         self._scale = int(self._num_grad_samples // self._scale_one_world_size)
@@ -207,6 +207,9 @@ class AdaScale(Optimizer):
     def temperature(self) -> float:
         return self._temperature
 
+    @property
+    def param_groups(self):
+        return self._optimizer.param_groups
 
     @property
     def _state(self) -> Dict[str, np.ndarray]:
@@ -477,7 +480,6 @@ class AdaScale(Optimizer):
         # This method should be invoked once for each parameter during the
         # backward pass, before gradients are synchronized between world_size.
 
-
         # Store the local gradient square sums in a tensor colocated with grad
         # This vector is also used for error checking. Whenever it is not None,
         # it means that we are in backward pass.
@@ -683,7 +685,7 @@ class AdaScale(Optimizer):
         assert self._local_grad_sqr is None, "Don't step without finishing backward phase"
         # Set original LR and set new LR.
         original_lr = []
-        for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+        for pg_idx, param_group in enumerate(self.param_groups):
             original_lr.append(param_group["lr"])
             param_group["lr"] = self.gain(pg_idx=pg_idx) * param_group["lr"]
             # log effective LR for param group 0
@@ -707,10 +709,8 @@ class AdaScale(Optimizer):
         else:
             self._optimizer.step(*args, **kwargs)
         # Restore the original LR.
-        for lr, param_group in zip(original_lr, self._optimizer.param_groups):
+        for lr, param_group in zip(original_lr, self.param_groups):
             param_group["lr"] = lr
-        # FIXME: AMP O2 seems to create a copy of param group dicts, so the proxy setup in c-tor breaks, force resync here so that scheduler works properly
-        self.param_groups = self._optimizer.param_groups
         return res
 
 
@@ -767,6 +767,9 @@ class AdaScale(Optimizer):
                 associated AdaScale internal states are not saved in the checkpoint.
         """
         adascale_state = self._optimizer.state_dict()['state']['adascale']
+        prev_scale = adascale_state['scale']
+        if prev_scale == self._scale:
+            self._reset_optimizer_state_on_restart = False
         assert self._local_grad_sqr is None, "Don't load checkpoint in backward"
         for k, v in  data['state']['adascale'].items():
             if self._reset_optimizer_state_on_restart:
@@ -774,9 +777,9 @@ class AdaScale(Optimizer):
                     print("!!! Resetting autoscaler state !!!")
                     continue
             adascale_state[k] = v
-        prev_scale = adascale_state['scale']
-        # adjust for current scale here
-        self._adjust_variance(prev_scale)
+        if prev_scale != self._scale:
+            # adjust for current scale here
+            self._adjust_variance(prev_scale)
 
         if self._enable_debug:
             print(f"{time.time()}-{self._rank}, IN AUTOSCALER RESTORED SI {adascale_state['scale_invariant_steps']}, {adascale_state['grad_sqr_avg']}, {adascale_state['grad_var_avg']}")
@@ -795,42 +798,59 @@ class AdaScale(Optimizer):
         ignore batch size predictions initially
         Q. should we not precondition for the initial steps? How does this affect AdaScale stats??
         TODO: Investigate other preconditioners
-        TODO: Only supports our modification of PT AdamW (modification caches pinv.) Extend to FusedAdam.
-        Older FusedAdam support (slower for getting preconditiner) is available in previous commits.
         """
         if self._real_iterations < self._MIN_STEPS or \
                 not self._precondition_gradients or \
                 param not in self._optimizer.state:
             return torch.ones_like(param, memory_format=torch.preserve_format)
-        # get current state for param
-        state = self._optimizer.state[param]
-        pinv = state['denom']
-        return pinv
+        elif self._use_pt_adam: # we use our AdamW mod of PT AdamW that caches preconditioner to avoid repeat computation 
+            # get current state for param
+            state = self._optimizer.state[param]
+            pinv = state['denom']
+            return pinv
+        else:
+            # in all other cases use this path - slower #TODO: optimize for step time impact
+            # get current state for param
+            state = self._optimizer.state[param]
+            # get param group settings
+            group = self.param_groups[pg_idx]
+            beta1, beta2 = group['betas']
+            step = group['step']
+            self._inner_opt_step = group['step']
+            exp_avg_sq = state["exp_avg_sq"].clone()
+            eps = group['eps']
+            bias_correction = 1 - beta2 ** step
+            pinv = (exp_avg_sq / bias_correction).sqrt().add_(eps)
+            return pinv
 
 
-    def log_to_tensorboard(self, real_iteration):
+    def log_to_tensorboard(self, real_iteration, phase=-1):
+        if phase > -1:
+            phase=str(phase)
+        else:
+            phase=""
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         scale_invariant_steps = adascale_state['scale_invariant_steps']
-        self._summary_writer.add_scalar('Train/Real Iterations', real_iteration, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/gain', self._gain, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/var_curr', self._nonsmooth_var[0], scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/temperature', self._temperature, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/scale', self._scale, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/accum_steps', self._num_grads_to_accum, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/var_si', self._var, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/sqr_si', self._sqr, scale_invariant_steps)
-        # self._summary_writer.add_scalar('Train/allreduced_grad_sqr', self.total_grad_sqr[0], scale_invariant_steps)
-        # self._summary_writer.add_scalar('Train/local_grad_sqr', self.local_grad_sqr[0]/self._num_grad_samples, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/GNS_si', self._gns, scale_invariant_steps)
-        self._summary_writer.add_scalar('Train/clipnorm', self._clipnorm, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/Real Iterations', real_iteration, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/gain', self._gain, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/var_curr', self._nonsmooth_var[0], scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/temperature', self._temperature, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/scale', self._scale, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/accum_steps', self._num_grads_to_accum, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/var_si', self._var, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/sqr_si', self._sqr, scale_invariant_steps)
+        # self._summary_writer.add_scalar('Train{phase}/allreduced_grad_sqr', self.total_grad_sqr[0], scale_invariant_steps)
+        # self._summary_writer.add_scalar('Train{phase}/local_grad_sqr', self.local_grad_sqr[0]/self._num_grad_samples, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/GNS_si', self._gns, scale_invariant_steps)
+        self._summary_writer.add_scalar(f'Train{phase}/clipnorm', self._clipnorm, scale_invariant_steps)
 
         # plot real iterations here
         if self._enable_debug:
-            self._summary_writer.add_scalar('Train/var', self._var, real_iteration)
-            self._summary_writer.add_scalar('Train/sqr', self._sqr, real_iteration)
-            self._summary_writer.add_scalar('Train/GNS', self._gns, real_iteration)
-        self._summary_writer.add_scalar('Train/Effective LR', self._effective_lr, scale_invariant_steps)
+            self._summary_writer.add_scalar(f'Train{phase}/var', self._var, real_iteration)
+            self._summary_writer.add_scalar(f'Train{phase}/sqr', self._sqr, real_iteration)
+            self._summary_writer.add_scalar(f'Train{phase}/GNS', self._gns, real_iteration)
+        self._summary_writer.add_scalar(f'Train{phase}/Effective LR', self._effective_lr, scale_invariant_steps)
 
 
     def check_for_cluster_resize(self):

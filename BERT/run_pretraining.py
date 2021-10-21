@@ -89,16 +89,16 @@ def create_pretraining_dataset(input_file, max_pred_length, shared_list, args,
     train_dataloader = DataLoader(train_data,
                                   sampler=train_sampler,
                                   batch_size=args.train_batch_size * args.n_gpu,
-                                  num_workers=8,
+                                  num_workers=4,
                                   worker_init_fn=worker_init,
-                                  pin_memory=False)#True)
+                                  pin_memory=True)
     return train_dataloader, input_file
 
 
 class pretraining_dataset(Dataset):
     def __init__(self, input_file, max_pred_length):
         self.input_file = input_file
-        self.max_pred_length = max_pred_length  # 128 and 512 for mixed batch training
+        self.max_pred_length = max_pred_length
         f = h5py.File(input_file, "r")
         keys = [
             'input_ids', 'input_mask', 'segment_ids', 'masked_lm_positions',
@@ -154,6 +154,64 @@ class BertPretrainingCriterion(torch.nn.Module):
         return total_loss
 
 
+class State:
+    """
+    Container for objects that we want to checkpoint. Represents the
+    current "state" of the worker. This object is mutable.
+    """
+
+    def __init__(self, arch, model, optimizer):
+        self.epoch = -1
+        self.best_acc1 = 0
+        self.arch = arch
+        self.model = model
+        self.optimizer = optimizer
+        self.global_step = 0
+
+    def capture_snapshot(self):
+        """
+        Essentially a ``serialize()`` function, returns the state as an
+        object compatible with ``torch.save()``. The following should work
+        ::
+
+        snapshot = state_0.capture_snapshot()
+        state_1.apply_snapshot(snapshot)
+        assert state_0 == state_1
+        """
+        return {
+            "epoch": self.epoch,
+            "best_acc1": self.best_acc1,
+            "arch": self.arch,
+            "state_dict": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "global_step": self.global_step
+        }
+
+    def apply_snapshot(self, obj, device_id):
+        """
+        The complimentary function of ``capture_snapshot()``. Applies the
+        snapshot object that was returned by ``capture_snapshot()``.
+        This function mutates this state object.
+        """
+        self.epoch = obj["epoch"]
+        self.best_acc1 = obj["best_acc1"]
+        self.state_dict = obj["state_dict"]
+        self.model.load_state_dict(obj["state_dict"])
+        self.optimizer.load_state_dict(obj["optimizer"])
+        self.global_step = obj["global_step"]
+
+    def save(self, f):
+        torch.save(self.capture_snapshot(), f)
+
+    def load(self, f, device_id):
+        # Map model to be loaded to specified single gpu.
+        snapshot = torch.load(f, map_location=f"cuda:{device_id}")
+        self.apply_snapshot(snapshot, device_id)
+
+
+
+
+
 def parse_arguments():
 
     parser = argparse.ArgumentParser()
@@ -172,21 +230,17 @@ def parse_arguments():
                         required=True,
                         help="The BERT model config")
 
-    parser.add_argument(
-        "--bert_model",
-        default="bert-large-uncased",
-        type=str,
-        help="Bert pre-trained model selected in the list: bert-base-uncased, "
-        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese."
-    )
+    parser.add_argument("--bert_model",
+                        default="bert-large-uncased",
+                        type=str,
+                        help="Bert pre-trained model selected in the list: bert-base-uncased, "
+                        "bert-large-uncased, bert-base-cased, bert-base-multilingual, bert-base-chinese.")
 
-    parser.add_argument(
-        "--output_dir",
-        default=None,
-        type=str,
-        required=True,
-        help="The output directory where the model checkpoints will be written."
-    )
+    parser.add_argument( "--output_dir",
+                        default=None,
+                        type=str,
+                        required=True,
+                        help="The output directory where the model checkpoints will be written.")
 
     ## Other parameters
     parser.add_argument("--init_checkpoint",
@@ -194,20 +248,17 @@ def parse_arguments():
                         type=str,
                         help="The initial checkpoint to start training from.")
 
-    parser.add_argument(
-        "--max_seq_length",
-        default=512,
-        type=int,
-        help=
-        "The maximum total input sequence length after WordPiece tokenization. \n"
-        "Sequences longer than this will be truncated, and sequences shorter \n"
-        "than this will be padded.")
+    parser.add_argument("--max_seq_length",
+                        default=512,
+                        type=int,
+                        help="The maximum total input sequence length after WordPiece tokenization. \n"
+                        "Sequences longer than this will be truncated, and sequences shorter \n"
+                        "than this will be padded.")
 
-    parser.add_argument(
-        "--max_predictions_per_seq",
-        default=80,
-        type=int,
-        help="The maximum total of masked tokens in input sequence")
+    parser.add_argument("--max_predictions_per_seq",
+                        default=80,
+                        type=int,
+                        help="The maximum total of masked tokens in input sequence")
 
     parser.add_argument("--train_batch_size",
                         default=32,
@@ -259,13 +310,11 @@ def parse_arguments():
                         type=float,
                         help="Total number of training steps to perform.")
 
-    parser.add_argument(
-        "--warmup_proportion",
-        default=0.01,
-        type=float,
-        help=
-        "Proportion of training to perform linear learning rate warmup for. "
-        "E.g., 0.1 = 10%% of training.")
+    parser.add_argument("--warmup_proportion",
+                        default=0.01,
+                        type=float,
+                        help="Proportion of training to perform linear learning rate warmup for. "
+                             "E.g., 0.1 = 10%% of training.")
 
     parser.add_argument("--local_rank",
                         type=int,
@@ -277,13 +326,10 @@ def parse_arguments():
                         default=42,
                         help="random seed for initialization")
 
-    parser.add_argument(
-        '--gradient_accumulation_steps',
-        type=int,
-        default=1,
-        help=
-        "Number of updates steps to accumualte before performing a backward/update pass."
-    )
+    parser.add_argument('--gradient_accumulation_steps',
+                        type=int,
+                        default=1,
+                        help="Number of updates steps to accumualte before performing a backward/update pass.")
 
     parser.add_argument('--fp16',
                         default=False,
@@ -295,13 +341,10 @@ def parse_arguments():
                         action='store_true',
                         help="Mixed precision training")
 
-    parser.add_argument(
-        '--loss_scale',
-        type=float,
-        default=0.0,
-        help=
-        'Loss scaling, positive power of 2 values can improve fp16 convergence.'
-    )
+    parser.add_argument('--loss_scale',
+                        type=float,
+                        default=0.0,
+                        help='Loss scaling, positive power of 2 values can improve fp16 convergence.')
 
     parser.add_argument('--log_freq',
                         type=float,
@@ -313,6 +356,7 @@ def parse_arguments():
                         action='store_true',
                         help="Whether to use gradient checkpointing")
 
+    # This should always be True for elastic training case
     parser.add_argument("--resume_from_checkpoint",
                         default=False,
                         action='store_true',
@@ -323,12 +367,10 @@ def parse_arguments():
                         default=-1,
                         help="Step to resume training from.")
 
-    parser.add_argument(
-        '--num_steps_per_checkpoint',
-        type=int,
-        default=100,
-        help="Number of update steps until a model checkpoint is saved to disk."
-    )
+    parser.add_argument('--num_steps_per_checkpoint',
+                        type=int,
+                        default=100,
+                        help="Number of update steps until a model checkpoint is saved to disk.")
 
     parser.add_argument('--skip_checkpoint',
                         default=False,
@@ -340,22 +382,20 @@ def parse_arguments():
                         action='store_true',
                         help="Whether to train with seq len 512")
 
-    parser.add_argument(
-        '--allreduce_post_accumulation',
-        default=False,
-        action='store_true',
-        help="Whether to do allreduces during gradient accumulation steps.")
+    parser.add_argument('--allreduce_post_accumulation',
+                        default=False,
+                        action='store_true',
+                        help="Whether to do allreduces during gradient accumulation steps.")
 
     parser.add_argument('--allreduce_post_accumulation_fp16',
                         default=False,
                         action='store_true',
                         help="Whether to do fp16 allreduce post accumulation.")
 
-    parser.add_argument(
-        '--phase1_end_step',
-        type=int,
-        default=-1,
-        help="Number of training steps in Phase1 - seq len 128")
+    parser.add_argument('--phase1_end_step',
+                        type=int,
+                        default=-1,
+                        help="Number of training steps in Phase1 - seq len 128")
 
     parser.add_argument('--init_loss_scale',
                         type=int,
@@ -388,7 +428,7 @@ def parse_arguments():
                         help='If provided, only run this many steps before exiting')
 
     parser.add_argument('--log_dir',
-                        default='/shared/logs',
+                        default='/home/ubuntu/workspace/logs',
                         type=str,
                         help='log directory path.')
 
@@ -402,49 +442,21 @@ def parse_arguments():
                         default='mzanur-autoscaler',
                         help='s3 bucket for tensorboard')
 
-    parser.add_argument('--use_adascale',
+    parser.add_argument('--autoscaler-cfg-path',
+                        default="/home/ubuntu/workspace/gradstats/BERT/autoscaler.yaml",
+                        type=str,
+                        help='AutoScaler configuration')
+
+    parser.add_argument('--enable-autoscaler',
                         default=False,
                         action='store_true',
-                        help='Enable AdaScale for large batch sizes')
+                        help='when enabled we start measuring gradient stats')
 
-    parser.add_argument('--use_preconditioner',
+    parser.add_argument('--sampling_with_replacement',
                         default=False,
                         action='store_true',
-                        help='condition gradients with moving average stats')
+                        help='Each rank sees a different shuffle of full dataset - if enabled then sharding is not done')
 
-    parser.add_argument(
-        '--enable_gns',
-        default=False,
-        action='store_true',
-        help='Enable gradient noise scale measurement for training run')
-
-    parser.add_argument(
-        '--sampling_with_replacement',
-        default=False,
-        action='store_true',
-        help=
-        'Each rank sees a different shuffle of full dataset - if enabled then sharding is not done'
-    )
-
-    parser.add_argument('--gns_smoothing',
-                        type=float,
-                        default=0.0,
-                        help='Smoothing factor for gradient stats.')
-
-    parser.add_argument('--lr_scale',
-                        type=float,
-                        default=1.0,
-                        help='Batch scaling factor for AdaScale.')
-    #FIXME: make part of checkpoint - hack to do deal with the PVRE reboot stupidity
-    parser.add_argument('--scale_invariant_steps',
-                        type=float,
-                        default=0.0,
-                        help='Batch scaling factor for AdaScale.')
-
-    parser.add_argument('--scale_one_bs',
-                        type=int,
-                        default=32768,
-                        help='Scale one Batch size for GNS.')
 
     args = parser.parse_args()
     args.fp16 = args.fp16 or args.amp
@@ -468,8 +480,7 @@ def setup_training(args):
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
-        torch.distributed.init_process_group(backend='nccl',
-                                             init_method='env://')
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.n_gpu = 1
 
     if args.gradient_accumulation_steps == 1:
@@ -478,41 +489,29 @@ def setup_training(args):
 
     if is_main_process():
         dllogger.init(backends=[
-            dllogger.JSONStreamBackend(verbosity=dllogger.Verbosity.VERBOSE,
-                                       filename=args.json_summary),
-            dllogger.StdOutBackend(verbosity=dllogger.Verbosity.VERBOSE,
-                                   step_format=format_step)
+            dllogger.JSONStreamBackend(verbosity=dllogger.Verbosity.VERBOSE, filename=args.json_summary),
+            dllogger.StdOutBackend(verbosity=dllogger.Verbosity.VERBOSE, step_format=format_step)
         ])
     else:
         dllogger.init(backends=[])
 
-    print(
-        "device: {} n_gpu: {}, distributed training: {}, 16-bits training: {}".
-        format(device, args.n_gpu, bool(args.local_rank != -1), args.fp16))
+    print(f"device: {device} n_gpu: {args.n_gpu}, distributed training: {bool(args.local_rank != -1)}, 16-bits training: {args.fp16}")
 
     if args.gradient_accumulation_steps < 1:
-        raise ValueError(
-            "Invalid gradient_accumulation_steps parameter: {}, should be >= 1"
-            .format(args.gradient_accumulation_steps))
+        raise ValueError(f"Invalid gradient_accumulation_steps parameter: {args.gradient_accumulation_steps}, should be >= 1")
     if args.train_batch_size % args.gradient_accumulation_steps != 0:
-        raise ValueError(
-            "Invalid gradient_accumulation_steps parameter: {}, batch size {} should be divisible"
-            .format(args.gradient_accumulation_steps, args.train_batch_size))
+        raise ValueError(f"Invalid gradient_accumulation_steps parameter: {args.gradient_accumulation_steps}, batch size {args.train_batch_size} should be divisible")
 
     args.train_batch_size = args.train_batch_size // args.gradient_accumulation_steps
 
     if not args.do_train:
         raise ValueError(" `do_train`  must be True.")
 
-    if not args.resume_from_checkpoint and os.path.exists(
-            args.output_dir) and (os.listdir(args.output_dir) and any(
-                [i.startswith('ckpt') for i in os.listdir(args.output_dir)])):
-        raise ValueError(
-            "Output directory ({}) already exists and is not empty.".format(
-                args.output_dir))
+    if not args.resume_from_checkpoint and os.path.exists(args.output_dir) and \
+            (os.listdir(args.output_dir) and any([i.startswith('ckpt') for i in os.listdir(args.output_dir)])):
+        raise ValueError(f"Output directory ({args.output_dir}) already exists and is not empty.")
 
-    if (not args.resume_from_checkpoint
-            or not os.path.exists(args.output_dir)) and is_main_process():
+    if (not args.resume_from_checkpoint or not os.path.exists(args.output_dir)) and is_main_process():
         os.makedirs(args.output_dir, exist_ok=True)
 
     return device, args
@@ -535,35 +534,45 @@ def prepare_model_and_optimizer(args, device):
         global_step = 0
     else:
         if args.resume_step == -1 and not args.init_checkpoint:
-            model_names = [
-                f for f in os.listdir(args.output_dir) if f.endswith(".pt")
-            ]
-            args.resume_step = max([
-                int(x.split('.pt')[0].split('_')[1].strip())
-                for x in model_names
-            ])
+            model_names = [f for f in os.listdir(args.output_dir) if f.endswith(".pt")]
+            if len(model_names) > 0:
+                args.resume_step = max([int(x.split('.pt')[0].split('_')[1].strip()) for x in model_names])
+            else:
+                print('No checkpoint found, resetting step to 0')
+                args.resume_step = 0
+                args.resume_from_checkpoint = False
+
         global_step = args.resume_step if not args.init_checkpoint else 0
 
-        if not args.init_checkpoint:
-            checkpoint = torch.load(os.path.join(
-                args.output_dir, "ckpt_{}.pt".format(global_step)),
-                                    map_location="cpu")
-        else:
-            checkpoint = torch.load(args.init_checkpoint, map_location="cpu")
-
-        model.load_state_dict(checkpoint['model'], strict=False)
-
-        if args.phase2:
-            if not args.init_checkpoint and args.phase1_end_step != -1:
-                global_step -= args.phase1_end_step
+        if args.resume_from_checkpoint: # a valid checkpoint was found
+            # load latest checkpoint
+            if not args.init_checkpoint:
+                ckpt_path = (os.path.join(args.output_dir, f"ckpt_{global_step}.pt"))
             else:
-                # with AdaScale we don't have a known value for phase1 end step we reset global step to 0
-                global_step = 0
-                args.phase1_end_step = args.resume_step
+                ckpt_path = args.init_checkpoint
+            checkpoint = torch.load(ckpt_path, map_location=device)
+            model.load_state_dict(checkpoint['model'], strict=False)
+            print("checkpoint keys ", checkpoint.keys())
+            
+            # differentiate between phase1 and phase2 restart
+            is_this_first_phase2_run = False
+            if checkpoint['phase'] == 1 and args.phase2:
+                is_this_first_phase2_run = True
+
+            if args.phase2:
+                if not args.init_checkpoint and args.phase1_end_step != -1:
+                    global_step -= args.phase1_end_step
+                elif is_this_first_phase2_run:
+                    # with AdaScale we don't have a known value for phase1 end step we reset global step to 0
+                    global_step = 0
+                    args.phase1_end_step = args.resume_step
+                else:
+                    # here we are resuming a phase2 training
+                    args.phase1_end_step = checkpoint['phase1_end_step']
+                    global_step = args.resume_step - args.phase1_end_step
 
         if is_main_process():
             print("resume step from ", args.resume_step)
-            print("checkpoint keys ", checkpoint.keys())
 
     model.to(device)
     param_optimizer = list(model.named_parameters())
@@ -571,18 +580,11 @@ def prepare_model_and_optimizer(args, device):
 
     if args.use_adamw:
         optimizer_grouped_parameters = [{
-            'params': [
-                p for n, p in param_optimizer
-                if not any(nd in n for nd in no_decay)
-            ],
-            'weight_decay':
-            args.adamw_weight_decay
-        }, {
-            'params':
-            [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
-            'weight_decay':
-            0.0
-        }]
+            'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+            'weight_decay': args.adamw_weight_decay},
+            {
+            'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay': 0.0}]
         optimizer = FusedAdam(optimizer_grouped_parameters,
                               lr=args.learning_rate,
                               betas=(args.adamw_beta1, args.adamw_beta2),
@@ -590,44 +592,27 @@ def prepare_model_and_optimizer(args, device):
                               adam_w_mode=True)
     else:
         optimizer_grouped_parameters = [{
-            'params': [
-                p for n, p in param_optimizer
-                if not any(nd in n for nd in no_decay)
-            ],
-            'weight_decay':
-            0.01
-        }, {
-            'params':
-            [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
-            'weight_decay':
-            0.0
-        }]
-
-        optimizer = FusedLAMB(optimizer_grouped_parameters,
-                              lr=args.learning_rate)
+            'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+            'weight_decay': 0.01},
+            {
+            'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay': 0.0}]
+        optimizer = FusedLAMB(optimizer_grouped_parameters, lr=args.learning_rate)
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.fp16)
     args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}'
     writer = SummaryWriter(args.tensorboard_path)
 
-    if args.use_adascale or args.enable_gns:
-        smoothing = None
-        if args.gns_smoothing > 0.0:
-            smoothing = args.gns_smoothing
+    if args.enable_autoscaler:
         optimizer = AdaScale(
             optimizer,
-            num_gradients_to_accumulate=args.gradient_accumulation_steps,
-            rank=get_rank(),
-            is_adaptive=(type(optimizer) is FusedLAMB
-                         or type(optimizer) is FusedAdam),
-            smoothing=smoothing,
-            scaler=scaler,
-            use_preconditioner=args.use_preconditioner,
-            summary_writer=writer,
+            autoscaler_cfg_path=args.autoscaler_cfg_path,
+            num_grads_to_accum=args.gradient_accumulation_steps,
             model=model,
-            max_grad_norm=5.0)
-
-        optimizer.set_scale(args.lr_scale)
+            scaler=scaler,
+            summary_writer=writer)
+    else:
+        optimizer.scale = 1
 
     lr_scheduler = PolyWarmUpScheduler(
         optimizer,
@@ -638,34 +623,44 @@ def prepare_model_and_optimizer(args, device):
 
     model.checkpoint_activations(args.checkpoint_activations)
 
+    ###############################################################################
+    #TODO: Migrate checkpointing functionality to AutoScaler checkpoint State class
+    ###############################################################################
+    args.scale_invariant_steps = 0
     if args.resume_from_checkpoint:
         if args.phase2 or args.init_checkpoint:
             keys = list(checkpoint['optimizer']['state'].keys())
             #Override hyperparameters from previous checkpoint
             for key in keys:
                 checkpoint['optimizer']['state'][key]['step'] = global_step
-            for iter, item in enumerate(checkpoint['optimizer']['param_groups']):
-                checkpoint['optimizer']['param_groups'][iter]['step'] = global_step
-                checkpoint['optimizer']['param_groups'][iter]['t_total'] = args.max_steps
-                checkpoint['optimizer']['param_groups'][iter]['warmup'] = args.warmup_proportion
-                checkpoint['optimizer']['param_groups'][iter]['lr'] = args.learning_rate
-        optimizer.load_state_dict(checkpoint['optimizer'])  # , strict=False)
-        #FIXME: find better way to resume after restart
-        lr_scheduler.last_epoch=args.scale_invariant_steps
+            for pg_idx, item in enumerate(checkpoint['optimizer']['param_groups']):
+                checkpoint['optimizer']['param_groups'][pg_idx]['step'] = global_step
+                checkpoint['optimizer']['param_groups'][pg_idx]['t_total'] = args.max_steps
+                checkpoint['optimizer']['param_groups'][pg_idx]['warmup'] = args.warmup_proportion
+                checkpoint['optimizer']['param_groups'][pg_idx]['lr'] = args.learning_rate
+        if (not args.phase2) or (not is_this_first_phase2_run):
+            lr_scheduler.last_epoch = checkpoint['optimizer']['state']['adascale']['scale_invariant_steps']
+        else:
+            lr_scheduler.last_epoch = 0
+        args.scale_invariant_steps = lr_scheduler.last_epoch
+
+        # adjust scale invariant steps in the checkpoint (if we reset it to zero for phase 2)
+        checkpoint['optimizer']['state']['adascale']['scale_invariant_steps'] = args.scale_invariant_steps
+        optimizer.load_state_dict(checkpoint['optimizer'])
+
         # Restore AMP master parameters
         if args.fp16:
             scaler.load_state_dict(checkpoint['scaler'])
             optimizer.load_state_dict(checkpoint['optimizer'])
 
+    ###############################################################################
+
     if args.local_rank != -1:
         if args.allreduce_post_accumulation:
-            # model = DDP(model, message_size=250000000, gradient_predivide_factor=get_world_size())
-            model = DDP(model,
-                        device_ids=[args.local_rank],
-                        output_device=args.local_rank)
+            # AutoScaler change - use standard DDP instead of Apex DDP
+            model = DDP(model, device_ids=[args.local_rank], output_device=args.local_rank)
         else:
             raise NotImplementedError
-            # flat_dist_call([param.data for param in model.parameters()], torch.distributed.broadcast, (0,) )
     elif args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
@@ -676,9 +671,8 @@ def prepare_model_and_optimizer(args, device):
 
 def take_optimizer_step(args, scaler, optimizer, model, global_step):
     if args.allreduce_post_accumulation:
-        if args.enable_gns or args.use_adascale:
-            # optimizer is adascale wrapped and we pass scaler as an argument
-            # to get loss scale
+        if args.enable_autoscaler:
+            # optimizer is adascale wrapped and we pass scaler as an argument to get loss scale
             optimizer.step()  
         else:
             scaler.step(optimizer)
@@ -708,8 +702,7 @@ def main():
     dllogger.log(step="PARAMETER", data={"Config": [str(args)]})
 
     # Prepare optimizer
-    model, optimizer, lr_scheduler, checkpoint, global_step, criterion, scaler, writer = prepare_model_and_optimizer(
-        args, device)
+    model, optimizer, lr_scheduler, checkpoint, global_step, criterion, scaler, writer = prepare_model_and_optimizer(args, device)
 
     if is_main_process():
         dllogger.log(step="PARAMETER", data={"SEED": args.seed})
@@ -737,8 +730,9 @@ def main():
         while True:
             thread = None
             restored_data_loader = None
-            if not args.resume_from_checkpoint or epoch > 0 or (
-                    args.phase2 and global_step < 1) or args.init_checkpoint:
+            if not args.resume_from_checkpoint or epoch > 0 or \
+                    (args.phase2 and global_step < 1) or \
+                    args.init_checkpoint:
                 files = [
                     os.path.join(args.input_dir, f)
                     for f in os.listdir(args.input_dir)
@@ -748,9 +742,8 @@ def main():
                 files.sort()
                 num_files = len(files)
                 if args.sampling_with_replacement:
-                    # different shuffle per rank
-                    random.Random(args.seed + epoch +
-                                  get_rank()).shuffle(files)
+                    # different shuffle per rank per epoch (since we have multiple epochs for wiki+books)
+                    random.Random(args.seed + epoch + get_rank()).shuffle(files)
                 else:
                     random.Random(args.seed + epoch).shuffle(files)
                 f_start_id = 0
@@ -767,31 +760,26 @@ def main():
 
             shared_file_list = {}
 
-            if torch.distributed.is_initialized(
-            ) and get_world_size() > num_files:
+            if torch.distributed.is_initialized() and get_world_size() > num_files:
                 remainder = get_world_size() % num_files
-                data_file = files[(f_start_id * get_world_size() + get_rank() +
-                                   remainder * f_start_id) % num_files]
+                data_file = files[(f_start_id * get_world_size() + get_rank() + remainder * f_start_id) % num_files]
             elif args.sampling_with_replacement:
                 data_file = files[f_start_id]
                 print("worker", get_rank(), data_file)
             else:
-                data_file = files[(f_start_id * get_world_size() + get_rank())
-                                  % num_files]
+                data_file = files[(f_start_id * get_world_size() + get_rank()) % num_files]
 
             previous_file = data_file
 
             if restored_data_loader is None:
-                train_data = pretraining_dataset(data_file,
-                                                 args.max_predictions_per_seq)
+                train_data = pretraining_dataset(data_file, args.max_predictions_per_seq)
                 train_sampler = RandomSampler(train_data)
-                train_dataloader = DataLoader(
-                    train_data,
-                    sampler=train_sampler,
-                    batch_size=args.train_batch_size * args.n_gpu,
-                    num_workers=12,
-                    worker_init_fn=worker_init,
-                    pin_memory=True)
+                train_dataloader = DataLoader(train_data,
+                                    sampler=train_sampler,
+                                    batch_size=args.train_batch_size * args.n_gpu,
+                                    num_workers=12,
+                                    worker_init_fn=worker_init,
+                                    pin_memory=True)
                 # shared_file_list["0"] = (train_dataloader, data_file)
             else:
                 train_dataloader = restored_data_loader
@@ -800,11 +788,9 @@ def main():
             for f_id in range(f_start_id + 1, len(files)):
 
                 if get_world_size() > num_files:
-                    data_file = files[(f_id * get_world_size() + get_rank() +
-                                       remainder * f_id) % num_files]
+                    data_file = files[(f_id * get_world_size() + get_rank() + remainder * f_id) % num_files]
                 else:
-                    data_file = files[(f_id * get_world_size() + get_rank()) %
-                                      num_files]
+                    data_file = files[(f_id * get_world_size() + get_rank()) % num_files]
 
                 # overwrite data file to look at current index
                 if args.sampling_with_replacement:
@@ -819,10 +805,8 @@ def main():
                                              shared_file_list, args,
                                              worker_init)
 
-                train_iter = tqdm(train_dataloader,
-                                  desc="Iteration",
-                                  disable=args.disable_progress_bar
-                                  ) if is_main_process() else train_dataloader
+                train_iter = tqdm(train_dataloader, desc="Iteration", disable=args.disable_progress_bar) \
+                        if is_main_process() else train_dataloader
 
                 if raw_train_start is None:
                     raw_train_start = time.time()
@@ -835,28 +819,23 @@ def main():
                     with torch.cuda.amp.autocast(enabled=args.fp16):
                         if not is_last_accumulation_step:
                             with model.no_sync():
-                                prediction_scores, seq_relationship_score = model(
-                                    input_ids=input_ids,
-                                    token_type_ids=segment_ids,
-                                    attention_mask=input_mask)
+                                prediction_scores, seq_relationship_score = model(input_ids=input_ids,
+                                                                                token_type_ids=segment_ids,
+                                                                                attention_mask=input_mask)
                                 loss = criterion(prediction_scores,
                                                  seq_relationship_score,
                                                  masked_lm_labels,
-                                                 next_sentence_labels
-                                                 )  # graph gets created here
+                                                 next_sentence_labels)
                         else:
-                            prediction_scores, seq_relationship_score = model(
-                                input_ids=input_ids,
-                                token_type_ids=segment_ids,
-                                attention_mask=input_mask)
+                            prediction_scores, seq_relationship_score = model(input_ids=input_ids,
+                                                                            token_type_ids=segment_ids,
+                                                                            attention_mask=input_mask)
                             loss = criterion(prediction_scores,
                                              seq_relationship_score,
                                              masked_lm_labels,
-                                             next_sentence_labels
-                                             )  # graph gets created here
+                                             next_sentence_labels)
                         if args.n_gpu > 1:
-                            loss = loss.mean(
-                            )  # mean() to average on multi-gpu.
+                            loss = loss.mean()  # DataParallel case
 
                     divisor = args.gradient_accumulation_steps
                     if accumulate_gradients:
@@ -864,9 +843,6 @@ def main():
                             # this division was merged into predivision
                             loss = loss / args.gradient_accumulation_steps
                             divisor = 1.0
-                    # AdaScale hook gets called here for backward - also graph will get cleared here so
-                    # this is loss for 1 batch and we do this grad accumulation times before
-                    # stepping the optimizer
                     if accumulate_gradients and not is_last_accumulation_step:
                         with model.no_sync():
                             # for this to work correctly ensure that loss calc is in similar context
@@ -874,89 +850,59 @@ def main():
                     else:
                         scaler.scale(loss).backward()
                     average_loss += loss.item()
+
                     # take one optimizer step for gradient accumulation steps
                     if training_steps % args.gradient_accumulation_steps == 0:
-                        ####### GNS/ADASCALE METRICS #########
-                        gns = 0.0
-                        if args.enable_gns:
-                            gns = optimizer.gns(scale_one_batch_size=args.scale_one_bs)
-                        if args.use_adascale:
-                            gain = optimizer.scale_invariant_steps(aggressive_base_schedule=False)
-                            prev_steps = math.floor(adascale_step)
-                            adascale_step = adascale_step + gain
-                            new_steps = math.floor(adascale_step)
-                            scale_invariant_steps = new_steps - prev_steps
-                            lr_scheduler.step(step_increment=scale_invariant_steps)
-                            # FIXME: For some reason at the first iteration the optimizer lr states do not get synced so force that here
-                            optimizer._optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']
+                        if args.enable_autoscaler:
+                            scheduler_progress = optimizer.get_step_increment()
+                            adascale_step += scheduler_progress
+                            lr_scheduler.step(step_increment=scheduler_progress)
                         else:
-                            lr_scheduler.step()  # learning rate warmup
+                            lr_scheduler.step()
                         global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
 
+                    learning_rate = optimizer.param_groups[0]['lr']
                     if adascale_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
-                        last_num_steps = int(
-                            training_steps /
-                            args.gradient_accumulation_steps) % args.log_freq
+                        last_num_steps = int(training_steps / args.gradient_accumulation_steps) % args.log_freq
                         last_num_steps = args.log_freq if last_num_steps == 0 else last_num_steps
-                        average_loss = torch.tensor(
-                            average_loss, dtype=torch.float32).cuda()
-                        average_loss = average_loss / (last_num_steps *
-                                                       divisor)
+                        average_loss = torch.tensor(average_loss, dtype=torch.float32).cuda()
+                        average_loss = average_loss / (last_num_steps * divisor)
                         if (torch.distributed.is_initialized()):
                             average_loss /= get_world_size()
                             torch.distributed.all_reduce(average_loss)
                         final_loss = average_loss.item()
                         if is_main_process():
-                            dllogger.log(step=(
-                                epoch,
-                                global_step,
-                            ), data={"final_loss": final_loss})
+                            dllogger.log(step=(epoch, global_step,), data={"final_loss": final_loss})
                         adascale_step += 1
-                    elif training_steps % (
-                            args.log_freq *
-                            args.gradient_accumulation_steps) == 0:
+                    elif training_steps % (args.log_freq * args.gradient_accumulation_steps) == 0:
                         average_loss /= (args.log_freq * divisor)
-                        learning_rate = optimizer.param_groups[0]['lr']
-                        if not args.use_adascale:
+                        if args.enable_autoscaler:
+                            gain = optimizer.gain()
+                            gns = optimizer.gns()
+                        else:
                             gain = 1.0
-                            adascale_step = global_step  # training_steps // args.gradient_accumulation_steps
+                            gns = 0
+                            adascale_step = global_step
 
                         if is_main_process():
-                            dllogger.log(
-                                step=(
-                                    epoch,
-                                    global_step,
-                                ),
+                            dllogger.log(step=(epoch, global_step,),
                                 data={
                                     "average_loss": average_loss,
                                     "step_loss": loss.item() * args.gradient_accumulation_steps / divisor,
                                     "learning_rate": learning_rate,
                                     "gain": gain,
                                     "gns": gns,
-                                    "scale": args.lr_scale,
                                     "effective_lr": learning_rate * gain,
                                     "scale_invariant_steps": adascale_step
                                 })
                         # for all workers log tensorboard summary
-                        writer.add_scalar('Train/Real Iterations', global_step, adascale_step)
-                        writer.add_scalar('Train/Loss', average_loss, adascale_step)
-                        writer.add_scalar('Train/Learning Rate', learning_rate, adascale_step)
-                        writer.add_scalar('Train/Gain', gain, adascale_step)
-                        if args.use_adascale:
-                            writer.add_scalar('Train/var', optimizer.nonsmooth_var[0], adascale_step)
-                            writer.add_scalar('Train/sqr', optimizer.nonsmooth_sqr[0], adascale_step)
-                            writer.add_scalar('Train/var_smooth', optimizer.var, adascale_step)
-                            writer.add_scalar('Train/sqr_smooth', optimizer.sqr, adascale_step)
-                            # only logging the first param group
-                            writer.add_scalar('Train/allreduced_grad_sqr', optimizer.total_grad_sqr[0],
-                                                adascale_step)
-                            writer.add_scalar('Train/local_grad_sqr', optimizer.local_grad_sqr[0],
-                                                adascale_step)
-                        writer.add_scalar('Train/GNS', gns, adascale_step)
-                        writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
-                        writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
-                        writer.flush()
+                        phase = 2 if args.phase2 else 1
+                        if get_rank() == 0:
+                            writer.add_scalar(f'Train{phase}/Loss', average_loss, adascale_step)
+                            if args.enable_autoscaler:
+                                optimizer.log_to_tensorboard(adascale_step, phase)
+                            writer.flush()
                         # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
                         if training_steps % 10 == 0:
                             # update the tensorboard log in s3 bucket
@@ -965,64 +911,44 @@ def main():
                                 print("Failed to push to S3")
                         # reset average loss for next print loop
                         average_loss = 0
-                    if adascale_step > args.steps_this_run or training_steps % (
-                            args.num_steps_per_checkpoint * args.
-                            gradient_accumulation_steps) == 0 or timeout_sent:
+                    if adascale_step > args.steps_this_run or \
+                            training_steps % (args.num_steps_per_checkpoint * args.gradient_accumulation_steps) == 0 or \
+                            timeout_sent:
                         if is_main_process() and not args.skip_checkpoint:
                             # Save a trained model
-                            dllogger.log(step="PARAMETER",
-                                         data={"checkpoint_step": global_step})
-                            model_to_save = model.module if hasattr(
-                                model, 'module'
-                            ) else model  # Only save the model it-self
+                            dllogger.log(step="PARAMETER", data={"checkpoint_step": global_step})
+                            model_to_save = model.module if hasattr(model, 'module') else model  # Only save the model it-self
                             if args.resume_step < 0 or not args.phase2:
-                                output_save_file = os.path.join(
-                                    args.output_dir,
-                                    "ckpt_{}.pt".format(global_step))
+                                output_save_file = os.path.join(args.output_dir, f"ckpt_{global_step}.pt")
                             else:
-                                output_save_file = os.path.join(
-                                    args.output_dir,
-                                    "ckpt_{}.pt".format(global_step +
-                                                        args.phase1_end_step))
+                                output_save_file = os.path.join(args.output_dir,f"ckpt_{global_step+args.phase1_end_step}.pt")
                             if args.do_train:
-                                torch.save(
-                                    {
-                                        'model':
-                                        model_to_save.state_dict(),
-                                        'optimizer':
-                                        optimizer.state_dict(),
-                                        'scaler':
-                                        scaler.state_dict(),
-                                        'files': [f_id] + files,
-                                        'epoch':
-                                        epoch,
-                                        'data_loader':
-                                        None if adascale_step >= args.max_steps
-                                        else train_dataloader
-                                    }, output_save_file)
+                                #TODO: Migrate to new ckpt class for AutoScaler
+                                torch.save({'model': model_to_save.state_dict(),
+                                            'optimizer': optimizer.state_dict(),
+                                            'scaler': scaler.state_dict(),
+                                            'files': [f_id] + files,
+                                            'epoch': epoch,
+                                            'data_loader': None if adascale_step >= args.max_steps else train_dataloader,
+                                            'phase': 2 if args.phase2 else 1, # using this to differentiate between phase1 and phase2 restarts
+                                            'phase1_end_step': args.phase1_end_step,}, output_save_file)
 
-                                most_recent_ckpts_paths.append(
-                                    output_save_file)
+                                most_recent_ckpts_paths.append(output_save_file)
                                 if len(most_recent_ckpts_paths) > 30:
-                                    ckpt_to_be_removed = most_recent_ckpts_paths.pop(
-                                        0)
+                                    ckpt_to_be_removed = most_recent_ckpts_paths.pop(0)
                                     os.remove(ckpt_to_be_removed)
 
                         # Exiting the training due to hitting max steps, or being sent a
                         # timeout from the cluster scheduler
                         if adascale_step > args.steps_this_run or timeout_sent:
                             del train_dataloader
-                            # thread.join()
                             writer.close()
                             return args, final_loss, train_time_raw, global_step
 
                 del train_dataloader
-                # thread.join()
                 # Make sure pool has finished and switch train_dataloader
                 # NOTE: Will block until complete
-                train_dataloader, data_file = dataset_future.result(
-                    timeout=None)
-
+                train_dataloader, data_file = dataset_future.result(timeout=None)
             epoch += 1
     writer.close()
 
@@ -1032,8 +958,7 @@ if __name__ == "__main__":
     now = time.time()
     args, final_loss, train_time_raw, global_step = main()
     gpu_count = args.n_gpu
-    global_step += args.phase1_end_step if (args.phase2
-                                            and args.resume_step > 0) else 0
+    global_step += args.phase1_end_step if (args.phase2 and args.resume_step > 0) else 0
     if args.resume_step == -1:
         args.resume_step = 0
     if torch.distributed.is_initialized():
@@ -1050,3 +975,4 @@ if __name__ == "__main__":
                          "raw_train_time": train_time_raw
                      })
     dllogger.flush()
+
