@@ -34,7 +34,7 @@ lr_poly_power=1
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
 warmup_proportion=${5:-"0.2222"}
-train_steps=${6:-10}
+train_steps=${6:-7038}
 save_checkpoint_steps=${7:-5}
 # for elastic setup this should be true by default
 resume_training=${8:-"true"}
