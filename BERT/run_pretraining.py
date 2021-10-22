@@ -622,7 +622,7 @@ def prepare_model_and_optimizer(args, device):
                               lr=args.learning_rate)
 
     scaler = torch.cuda.amp.GradScaler(enabled=args.fp16)
-    args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-{torch.distributed.get_rank()}'
+    args.tensorboard_path = f'{args.log_dir}/{args.label}/worker-0'
     writer = SummaryWriter(args.tensorboard_path)
 
     if args.use_adascale or args.enable_gns:
