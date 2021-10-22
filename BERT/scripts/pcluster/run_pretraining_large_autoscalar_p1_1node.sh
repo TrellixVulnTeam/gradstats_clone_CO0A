@@ -14,6 +14,7 @@
 # limitations under the License.
 
 # setup NCCL to use EFA
+# Trial script for 1 node
 export FI_PROVIDER=efa
 export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
@@ -41,7 +42,7 @@ create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-128}
 seed=${12:-72337}
-job_name=${13:-"bert_large_adamw_pretraining"}
+job_name=${13:-"bert_large_adamw_pretraining_autoscaler"}
 allreduce_post_accumulation=${14:-"true"}
 # NOTE: this phase2 bs is different from NV training setup where phase2 bs is half of phase1
 train_batch_size_phase2=${16:-1024}
@@ -54,15 +55,15 @@ train_steps_phase2=${19:-1562}
 gradient_accumulation_steps_phase2=${20:-128}
 sampling_with_replacement=${21:-"true"}
 enable_autoscaler=${22:-"true"}
-AUTOSCALER_CONFIG=/home/ubuntu/workspace/gradstats/BERT/autoscaler.yaml
+AUTOSCALER_CONFIG=/fsx/code/gradstats/BERT/autoscaler.yaml
 DATASET=books_wiki_en_corpus
-DATA_DIR_PHASE1=/home/ubuntu/data/nlp/BERT/phase1/
-BERT_CONFIG=/home/ubuntu/workspace/gradstats/BERT/bert_config.json
-DATASET2=books_wiki_en_corpus 
-DATA_DIR_PHASE2=/home/ubuntu/data/nlp/BERT/phase2/
-CODEDIR=${23:-"/home/ubuntu/workspace/gradstats/BERT"}
+DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/
+BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
+DATASET2=books_wiki_en_corpus
+DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/
+CODEDIR=${23:-"/fsx/code/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/home/ubuntu/logs/BERT/2x_debug/
+RESULTS_DIR=/fsx/logs/BERT/2x_debug/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
@@ -84,7 +85,7 @@ if [ ! -f "$BERT_CONFIG" ] ; then
    echo "Error! BERT configuration file not found at $BERT_CONFIG"
    exit -1
 fi
-# 
+#
 PREC=""
 if [ "$precision" = "fp16" ] ; then
    PREC="--fp16"
@@ -96,12 +97,12 @@ else
    echo "Unknown <precision> argument"
    exit -2
 fi
- 
+
 ACCUMULATE_GRADIENTS=""
 if [ "$accumulate_gradients" == "true" ] ; then
    ACCUMULATE_GRADIENTS="--gradient_accumulation_steps=$gradient_accumulation_steps"
 fi
- 
+
 CHECKPOINT=""
 if [ "$resume_training" == "true" ] ; then
    CHECKPOINT="--resume_from_checkpoint"
@@ -121,17 +122,17 @@ ALL_REDUCE_POST_ACCUMULATION=""
 if [ "$allreduce_post_accumulation" == "true" ] ; then
    ALL_REDUCE_POST_ACCUMULATION="--allreduce_post_accumulation"
 fi
- 
+
 ALL_REDUCE_POST_ACCUMULATION_FP16=""
 if [ "$allreduce_post_accumulation_fp16" == "true" ] ; then
    ALL_REDUCE_POST_ACCUMULATION_FP16="--allreduce_post_accumulation_fp16"
 fi
- 
+
 INIT_CHECKPOINT=""
 if [ "$init_checkpoint" != "None" ] ; then
    INIT_CHECKPOINT="--init_checkpoint=$init_checkpoint"
 fi
- 
+
 echo $DATA_DIR_PHASE1
 INPUT_DIR=$DATA_DIR_PHASE1
 CMD=" $CODEDIR/run_pretraining.py"
@@ -166,22 +167,22 @@ CMD+=" $ENABLE_AUTOSCALER"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --label bert_training_large_64k_local "
-# # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob 
+# # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob
 # WORLD_SIZE=
 # RANK=
 # For EKS we set 8 GPUs per node (pod)
 PROC_PER_NODE=8
 # MASTER_ADDR_JOB=
 # MASTER_PORT_JOB=
- 
+
 # setup NCCL to use EFA
 export FI_PROVIDER=efa
 export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
- 
-# Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node 
+
+# Note: If we have 4 nodes in cluster, we will launch 1 Master and 3 Workers in EKS launcher - WORLD_SIZE will be set as 4 and we will pass 8 gpus per node
 # CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR} --master_port=${MASTER_PORT} $CMD"
-CMD="python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
+CMD="/fsx/conda/envs/pytorch_latest_p37_fsx/bin/python -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE $CMD"
 
 
 if [ "$create_logfile" = "true" ] ; then
