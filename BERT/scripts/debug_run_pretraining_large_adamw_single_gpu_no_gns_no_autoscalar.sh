@@ -4,7 +4,7 @@
 # conda env 
 source /fsx/conda/bin/activate /fsx/conda/envs/pytorch_latest_p37_fsx
 
-train_batch_size=${1:-1024}
+train_batch_size=${1:-8}
 learning_rate=${2:-"1.3653e-3"}
 adamw_beta1=0.952378
 adamw_beta2=0.86471
