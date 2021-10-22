@@ -20,7 +20,6 @@ export FI_EFA_TX_MIN_CREDITS=64
 export NCCL_DEBUG=INFO
 export RDMAV_FORK_SAFE=1
 export NCCL_TREE_THRESHOLD=0
-export NCCL_SOCKET_IFNAME=ens5
 export OMP_NUM_THREADS=96
 
 # 64K batch settings for 8 32GB GPUs
