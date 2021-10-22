@@ -469,7 +469,7 @@ def setup_training(args):
 
     if args.local_rank == -1:
         device = torch.device("cuda")
-        args.n_gpu = torch.cuda.device_count()
+        args.n_gpu = 1
         args.allreduce_post_accumulation = False
         args.allreduce_post_accumulation_fp16 = False
     else:
