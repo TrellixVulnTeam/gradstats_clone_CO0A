@@ -690,6 +690,7 @@ def prepare_model_and_optimizer(args, device):
 
 
 def take_optimizer_step(args, scaler, optimizer, model, global_step):
+    norm = 0.0
     if args.allreduce_post_accumulation:
         if args.enable_gns or args.use_adascale:
             # optimizer is adascale wrapped and we pass scaler as an argument
@@ -708,7 +709,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
         global_step += 1
     else:
         raise NotImplementedError
-    return global_step
+    return global_step, norm
 
 
 def main():
@@ -909,7 +910,7 @@ def main():
                             optimizer._optimizer.param_groups[0]['lr'] = optimizer.param_groups[0]['lr']
                         else:
                             lr_scheduler.step()  # learning rate warmup
-                        global_step = take_optimizer_step(args, scaler, optimizer, model, global_step)
+                        global_step, grad_norm = take_optimizer_step(args, scaler, optimizer, model, global_step)
 
                     if adascale_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
@@ -975,6 +976,7 @@ def main():
                             writer.add_scalar('Train/GNS', gns, adascale_step)
                             writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
                             writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
+                            writer.add_scalar('Train/Gradient norm', grad_norm, adascale_step)
                             writer.flush()
                         # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
                         if training_steps % 10 == 0:
