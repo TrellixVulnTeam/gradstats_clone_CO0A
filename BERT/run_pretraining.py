@@ -553,7 +553,7 @@ def prepare_model_and_optimizer(args, device):
             checkpoint = torch.load(ckpt_path, map_location=device)
             model.load_state_dict(checkpoint['model'], strict=False)
             print("checkpoint keys ", checkpoint.keys())
-            
+
             # differentiate between phase1 and phase2 restart
             is_this_first_phase2_run = False
             if checkpoint['phase'] == 1 and args.phase2:
@@ -673,8 +673,10 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
     if args.allreduce_post_accumulation:
         if args.enable_autoscaler:
             # optimizer is adascale wrapped and we pass scaler as an argument to get loss scale
-            optimizer.step()  
+            optimizer.step()
         else:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             scaler.step(optimizer)
         # update scaler state machine
         scaler.update()
