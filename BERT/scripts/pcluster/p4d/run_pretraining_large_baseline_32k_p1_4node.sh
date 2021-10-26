@@ -58,15 +58,15 @@ train_steps_phase2=${19:-1562}
 gradient_accumulation_steps_phase2=${20:-128}
 sampling_with_replacement=${21:-"false"}
 enable_autoscaler=${22:-"false"}
-AUTOSCALER_CONFIG=/fsx/mzanur/gradstats/BERT/autoscaler.yaml
+AUTOSCALER_CONFIG=/fsx/code/gradstats/BERT/autoscaler.yaml
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/
-BERT_CONFIG=/fsx/mzanur/gradstats/BERT/bert_config.json
+BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
 DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/
-CODEDIR=${23:-"/fsx/mzanur/gradstats/BERT"}
+CODEDIR=${23:-"/fsx/code/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/fsx/logs/BERT/2x_mzanur/
+RESULTS_DIR=/fsx/logs/BERT/64kbs_32hps_autoscaler/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
 mkdir -p $CHECKPOINTS_DIR
