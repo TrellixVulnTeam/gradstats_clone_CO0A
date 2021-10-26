@@ -64,7 +64,7 @@ DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/
 BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
 DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/
-CODEDIR=${23:-"/fsx/mzanur/gradstats/BERT"}
+CODEDIR=${23:-"/fsx/code/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
 RESULTS_DIR=/fsx/logs/BERT/64kbs_64hps_autoscaler/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
@@ -200,7 +200,7 @@ if [ "$create_logfile" = "true" ] ; then
   printf "Logs written to %s\n" "$LOGFILE"
 fi
 
-set -x
+set -x /fsx/code/gradstats/BERT/run_pretraining.py
 
 if [ -z "$LOGFILE" ] ; then
    $CMD
