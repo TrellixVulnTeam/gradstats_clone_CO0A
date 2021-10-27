@@ -29,7 +29,7 @@ conda activate /fsx/conda/envs/pytorch_latest_p37_fsx
 # 128K batch settings for 32 40GB GPUs (4 P4D)
 # per gpu batch size = 4096/64 (gradient accumulation steps) = 64
 train_batch_size=${1:-4096}
-learning_rate=${2:-"1.3653e−3"}
+learning_rate=${2:-"1.3653e-3"}
 adamw_beta1=0.95238
 adamw_beta2=0.86471
 adamw_weight_decay=0.19891
