@@ -22,5 +22,6 @@ adascale:
 gradient_noise_scale:
   batch_size_upper_limit: .Inf
   scale_one_batch_size: 65536
-  # scale one world size for phase1 = 32 gpus X 16 gradient accumulation steps
-  scale_one_world_size: 512
+  # scale one world size for phase1 = 32 gpus X 32 gradient accumulation steps
+  # Scale for base batch size 64k
+  scale_one_world_size: 1024

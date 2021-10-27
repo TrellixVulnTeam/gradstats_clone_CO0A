@@ -26,39 +26,40 @@ export NCCL_TREE_THRESHOLD=0
 source /fsx/conda/etc/profile.d/conda.sh
 conda activate /fsx/conda/envs/pytorch_latest_p37_fsx
 
-# 64K batch settings for 32 40GB GPUs (4 P4D)
-train_batch_size=${1:-2048}
-learning_rate=${2:-"5.9415e-4"}
-adamw_beta1=0.934271
-adamw_beta2=0.989295
+# 128K batch settings for 32 40GB GPUs (4 P4D)
+# per gpu batch size = 4096/64 (gradient accumulation steps) = 64
+train_batch_size=${1:-4096}
+learning_rate=${2:-"5.9415 ×10−4"}
+adamw_beta1=0.93427
+adamw_beta2=0.9893
 adamw_weight_decay=0.31466
 adamw_eps="1.0e-11"
 lr_poly_power=1
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
-warmup_proportion=${5:-"0.2222"}
-train_steps=${6:-14063}
+warmup_proportion=${5:-"0.28421"}
+train_steps=${6:-4000}
 save_checkpoint_steps=${7:-5}
 # for elastic setup this should be true by default
 resume_training=${8:-"true"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-32}
+gradient_accumulation_steps=${11:-64}
 seed=${12:-72337}
-job_name=${13:-"bert_large_adamw_pretraining_autoscaler_128k_2xbs_scaling"}
+job_name=${13:-"128kbs_64hps_autoscaler_bertlarge"}
 allreduce_post_accumulation=${14:-"true"}
 # NOTE: this phase2 bs is different from NV training setup where phase2 bs is half of phase1
 train_batch_size_phase2=${16:-1024}
 learning_rate_phase2=${17:-"2.8464e-4"}
-adamw_phase2_beta1=0.963567
-adamw_phase2_beta2=0.952647
-adamw_phase2_weight_decay=0.31466
+adamw_phase2_beta1=0.65322
+adamw_phase2_beta2=0.82451
+adamw_phase2_weight_decay=0.19891
 warmup_proportion_phase2=${18:-"0.5"}
-train_steps_phase2=${19:-1562}
+train_steps_phase2=${19:-781}
 gradient_accumulation_steps_phase2=${20:-128}
 sampling_with_replacement=${21:-"false"}
 enable_autoscaler=${22:-"true"}
-AUTOSCALER_CONFIG=/fsx/code/gradstats/BERT/autoscaler.yaml
+AUTOSCALER_CONFIG=/fsx/code/gradstats/BERT/autoscaler_64kbase.yaml
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/
 BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
@@ -66,9 +67,8 @@ DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/
 CODEDIR=${23:-"/fsx/code/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/fsx/logs/BERT/64kbs_32hps_autoscaler/
+RESULTS_DIR=/fsx/logs/BERT/128kbs_64hps_autoscaler/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
-TB_DIR=$RESULTS_DIR/tensorboard_phase1
 
 mkdir -p $CHECKPOINTS_DIR
 
@@ -171,13 +171,11 @@ CMD+=" $ENABLE_AUTOSCALER"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --label bert_training_large_64K_4node "
-CMD+=" --label ${TB_DIR} "
 
 # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob
 PROC_PER_NODE=8
 WORLD_SIZE=$SLURM_NTASKS
 RANK=$SLURM_NODEID
-PROC_PER_NODE=8
 MASTER_ADDR_JOB=$SLURM_SUBMIT_HOST
 MASTER_PORT_JOB="12277"
 
@@ -203,7 +201,7 @@ if [ "$create_logfile" = "true" ] ; then
   printf "Logs written to %s\n" "$LOGFILE"
 fi
 
-set -x
+set -x /fsx/code/gradstats/BERT/run_pretraining.py
 
 if [ -z "$LOGFILE" ] ; then
    $CMD
