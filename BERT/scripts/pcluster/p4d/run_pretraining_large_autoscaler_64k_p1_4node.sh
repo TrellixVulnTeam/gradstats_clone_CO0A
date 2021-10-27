@@ -45,7 +45,7 @@ create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
 gradient_accumulation_steps=${11:-32}
 seed=${12:-72337}
-job_name=${13:-"bert_large_adamw_pretraining_autoscaler"}
+job_name=${13:-"bert_large_adamw_pretraining_autoscaler_64k_2xbs_scaling"}
 allreduce_post_accumulation=${14:-"true"}
 # NOTE: this phase2 bs is different from NV training setup where phase2 bs is half of phase1
 train_batch_size_phase2=${16:-1024}
@@ -58,16 +58,17 @@ train_steps_phase2=${19:-1562}
 gradient_accumulation_steps_phase2=${20:-128}
 sampling_with_replacement=${21:-"false"}
 enable_autoscaler=${22:-"true"}
-AUTOSCALER_CONFIG=/fsx/mzanur/gradstats/BERT/autoscaler.yaml
+AUTOSCALER_CONFIG=/fsx/code/gradstats/BERT/autoscaler.yaml
 DATASET=books_wiki_en_corpus
 DATA_DIR_PHASE1=/fsx/data/nlp/BERT/phase1/
-BERT_CONFIG=/fsx/mzanur/gradstats/BERT/bert_config.json
+BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
 DATASET2=books_wiki_en_corpus
 DATA_DIR_PHASE2=/fsx/data/nlp/BERT/phase2/
-CODEDIR=${23:-"/fsx/mzanur/gradstats/BERT"}
+CODEDIR=${23:-"/fsx/code/gradstats/BERT"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=/fsx/logs/BERT/2x_mzanur_autoscaler/
+RESULTS_DIR=/fsx/logs/BERT/64kbs_32hps_autoscaler/
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
+TB_DIR=$RESULTS_DIR/tensorboard_phase1
 
 mkdir -p $CHECKPOINTS_DIR
 
@@ -170,6 +171,7 @@ CMD+=" $ENABLE_AUTOSCALER"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --label bert_training_large_64K_4node "
+CMD+=" --label ${TB_DIR} "
 
 # set up environment variables for Torch DistributedDataParallel - set by PyTorchJob
 PROC_PER_NODE=8
