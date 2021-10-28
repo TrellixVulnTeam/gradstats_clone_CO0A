@@ -5,9 +5,9 @@ metadata:
 provisioner: fsx.csi.aws.com
 parameters:
   # subnet where your workers are
-  subnetId: "subnet-0ec2fdcb8bae402f8"
+  subnetId: "subnet-0089c599d6f60eb4f"
   # sg id of worker - must allow port 988 for Lustre 
-  securityGroupIds: "sg-003677543e2c49056"
+  securityGroupIds: "sg-0bb64d9ed16cb20de"
   # S3 datasets path
   s3ImportPath: s3://mzanur-autoscaler/
   # S3 output path
