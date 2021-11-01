@@ -50,7 +50,7 @@ from schedulers import LinearWarmUpScheduler
 from torch.utils.tensorboard import SummaryWriter
 import dllogger
 from concurrent.futures import ProcessPoolExecutor
-
+import collections
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
 
@@ -690,7 +690,8 @@ def prepare_model_and_optimizer(args, device):
 
 
 def take_optimizer_step(args, scaler, optimizer, model, global_step):
-    norm = 0.0
+    from collections import defaultdict
+    norm = defaultdict()
     if args.allreduce_post_accumulation:
         if args.enable_gns or args.use_adascale:
             # optimizer is adascale wrapped and we pass scaler as an argument
@@ -699,6 +700,13 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
         else:
             if args.grad_clipping_norm is not None:
                 scaler.unscale_(optimizer)
+                norm['normnorm_embedding'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
+                for i in range(5,384,16):
+                    layer_no = (i-5)%16
+                    norm[str[layer_no]] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][i:i+16], max_norm=args.grad_clipping_norm)
+                norm['cls'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][388:], max_norm=args.grad_clipping_norm)
+
+
                 norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clipping_norm)
             scaler.step(optimizer)
         # update scaler state machine
@@ -976,7 +984,9 @@ def main():
                             writer.add_scalar('Train/GNS', gns, adascale_step)
                             writer.add_scalar('Train/Scale', args.lr_scale, adascale_step)
                             writer.add_scalar('Train/Effective LR', learning_rate * gain, adascale_step)
-                            writer.add_scalar('Train/Gradient norm', grad_norm, adascale_step)
+                            for key, value in grad_norm.items():
+                                writer.add_scalar('Train/' + key, value, adascale_step)
+
                             writer.flush()
                         # pushing to S3 is a sync call at the moment and is very expensive so we reduce the frequency of push
                         if training_steps % 10 == 0:
