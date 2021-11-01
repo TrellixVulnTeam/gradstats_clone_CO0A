@@ -706,8 +706,6 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                     norm[str(layer_no)] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][i:i+16], max_norm=args.grad_clipping_norm)
                 norm['cls'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][388:], max_norm=args.grad_clipping_norm)
 
-
-                norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clipping_norm)
             scaler.step(optimizer)
         # update scaler state machine
         scaler.update()
