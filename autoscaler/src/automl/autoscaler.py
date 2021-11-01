@@ -100,8 +100,9 @@ class AdaScale(Optimizer):
         # also used for adjusting temperature for gns predictions
         self._current_batch_size = self._scale_one_batch_size * self._scale # self._num_grad_samples
 
-        #HACK: Replace with adaptive scheme if this helps
-        self._max_grad_norm = self.cfg.max_grad_norm if self._scale > 8 else 0.0
+        # HACK: Replace with adaptive scheme if this helps
+        # TODO: add for elastic scale case when batch size is very large
+        self._max_grad_norm = self.cfg.max_grad_norm # if self._scale > 8 else 0.0
         self._batch_size_upper_limit = self.cfg.batch_size_upper_limit
         assert self._current_batch_size <= self._batch_size_upper_limit
 
@@ -594,48 +595,56 @@ class AdaScale(Optimizer):
         # note that we do not use this value directly, we take expectation over iterations
         # Also we adjust for B_small in gns calculation - the value tracked is along lines of
         # AdaScale gain calculation
-                
-        if S > 1:
-            grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
-            # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
-            grad_sqr = total_grad_sqr - grad_var / S
+
+
+        torch.clamp_(self._gain_invalid, max=0)
+        if np.isnan(np.sum(local_grad_sqr)) or \
+            np.isinf(np.sum(local_grad_sqr)) or \
+            np.isnan(np.sum(total_grad_sqr)) or \
+            np.isinf(np.sum(total_grad_sqr)):
+            torch.clamp_(self._gain_invalid, min=1)
+            grad_var = self._grad_var_avg(0)
+            grad_sqr = self._grad_sqr_avg(0)
         else:
-            # for S=1
-            grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
-            grad_sqr = total_grad_sqr - grad_var / cN
+            if S > 1:
+                grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
+                # grad_sqr is derived by manipulating variance = E[sqr(x)] - sqr(E[x])
+                grad_sqr = total_grad_sqr - grad_var / S
+            else:
+                # for S=1
+                grad_var = local_grad_sqr / (cN - 1) - total_grad_sqr * cN / (cN - 1)
+                grad_sqr = total_grad_sqr - grad_var / cN
 
-        # Bounding these values artificially is not good
-        # affects moving averages which in turn lingers on depending on smoothing
-        # also good bounding value for variance is problem dependent, so we skip
-        # updating averages when variance value is not stable
-        #grad_var = np.maximum(grad_var, 1e-6)
-        grad_sqr = np.maximum(grad_sqr, 0.0)
+            # Bounding these values artificially is not good
+            # affects moving averages which in turn lingers on depending on smoothing
+            # also good bounding value for variance is problem dependent, so we skip
+            # updating averages when variance value is not stable
+            #grad_var = np.maximum(grad_var, 1e-6)
+            grad_sqr = np.maximum(grad_sqr, 0.0)
 
-        # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
-        self._nonsmooth_var = grad_var
-        self._nonsmooth_sqr = grad_sqr
+            # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
+            self._nonsmooth_var = grad_var
+            self._nonsmooth_sqr = grad_sqr
 
-        self._gain_invalid[0] = 0
+            if found_outlier or \
+                    np.any(grad_var <= 0.) or \
+                    np.any(grad_sqr < 0.) or \
+                    np.isnan(np.sum(grad_var)) or \
+                    np.isinf(np.sum(grad_var)) or \
+                    np.isnan(np.sum(grad_sqr)) or \
+                    np.isinf(np.sum(grad_sqr)):
+                if self._enable_debug:
+                    print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
+                    print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
+                self._gain_invalid[0] = 1
 
-        if found_outlier or \
-                np.any( grad_var <= 0.) or \
-                np.any( grad_sqr < 0.) or \
-                np.isnan(np.sum(grad_sqr)) or \
-                np.isinf(np.sum(grad_sqr)) or \
-                np.isnan(np.sum(local_grad_sqr)) or \
-                np.isinf(np.sum(local_grad_sqr)):
-            if self._enable_debug:
-                print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
-                print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
-            self._gain_invalid[0] = 1
-
-        # an extra boolean sync here for checking if any of the worker stats blew up and skip update
-        if self._world_size > 1:
-            dist.all_reduce(self._gain_invalid)
-
+        # ALL CASES FOR INVALID GAIN ARE ON common stats so all workers should avoid update
+        # no need to sync invalid state
         if self._gain_invalid[0] == 0:
             self._update_avg("grad_sqr_avg", grad_sqr, self.smoothing)
             self._update_avg("grad_var_avg", grad_var, self.smoothing)
+        else:
+            print('gradient inf/nan skipping update of moving averages of grad moments')
 
         # reset backward call counters for next param update cycle
         self._last_final_backward_call = self._num_backward_calls = 0
@@ -650,7 +659,7 @@ class AdaScale(Optimizer):
         """
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         assert self._local_grad_sqr is None, "Don't step without finishing backward phase"
-        if self._gain_invalid:
+        if self._gain_invalid[0] != 0:
             return 1 # should this be 1 or 0
         prev_steps = np.floor(adascale_state['scale_invariant_steps'])
         adascale_state['scale_invariant_steps'] += self.scale_invariant_steps()
@@ -705,6 +714,9 @@ class AdaScale(Optimizer):
                 # Google BERT uses grad norm clipping with Adam optimizer
                 self._scaler.unscale_(self._optimizer)
                 self._clipnorm = torch.nn.utils.clip_grad_norm_(self._model.parameters(), max_norm=self._max_grad_norm)
+            # NOTE: scaler.step() first unscales the gradients of the optimizer's assigned params.
+            # If these gradients do not contain infs or NaNs, optimizer.step() is then called,
+            # otherwise, optimizer.step() is skipped.
             res = self._scaler.step(self._optimizer)
         else:
             self._optimizer.step(*args, **kwargs)
