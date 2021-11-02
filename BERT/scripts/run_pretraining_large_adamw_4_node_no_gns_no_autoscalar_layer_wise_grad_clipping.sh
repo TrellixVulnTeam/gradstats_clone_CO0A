@@ -44,9 +44,10 @@ DATASET2=books_wiki_en_corpus # hdf5_lower_case_1_seq_len_512_max_pred_80_masked
 DATA_DIR_PHASE2=//home/ubuntu/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results/pretrain_large_4node_adam_layer
+grad_clipping_norm=${25:-"1.0"}
+RESULTS_DIR=$CODEDIR/results/pretrain_large_4node_adam_grad_clipping_layerwise
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
-TB_DIR=$RESULTS_DIR/tensorboard
+TB_DIR=$RESULTS_DIR/tensorboard_phase1
 BUCKET=mansmane-us-west-2
 mkdir -p $CHECKPOINTS_DIR
  
@@ -135,10 +136,10 @@ CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
 CMD+=" $INIT_CHECKPOINT"
 CMD+=" --do_train"
 CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
-TB_DIR=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
 CMD+=" --bucket ${BUCKET} "
- 
+CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
+
 # # set up environment variables for Torch DistributedDataParallel
 WORLD_SIZE=$SLURM_NTASKS
 RANK=$SLURM_NODEID
@@ -238,8 +239,10 @@ echo "finished pretraining"
  CMD+=" $ALL_REDUCE_POST_ACCUMULATION_FP16"
  CMD+=" --do_train --phase2 --resume_from_checkpoint --phase1_end_step=$train_steps"
  CMD+=" --json-summary ${RESULTS_DIR}/dllogger2.json "
+ TB_DIR=$RESULTS_DIR/tensorboard_phase2
  CMD+=" --log_dir ${TB_DIR} "
  CMD+=" --bucket ${BUCKET} "
+ CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
 
 
  CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"

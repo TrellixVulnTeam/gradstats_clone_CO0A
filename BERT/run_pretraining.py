@@ -700,11 +700,25 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
         else:
             if args.grad_clipping_norm is not None:
                 scaler.unscale_(optimizer)
-                norm['normnorm_embedding'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
+                # Just log the norms
+                # device = [param for name, param in model.named_parameters()][0:1][0].grad.device
+                # norm['norm_embedding'] = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters()]), 2.0)
+                #
+                #
+                # norm['norm_embedding'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
+                # for i in range(5,384,16):
+                #     layer_no = int((i-5)/16)
+                #     norm['layer_'+ str(layer_no)] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][i:i+16], max_norm=args.grad_clipping_norm)
+                # norm['cls'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][388:], max_norm=args.grad_clipping_norm)
+
+
+                # scale and calculate norm
+                norm['norm_embedding'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
                 for i in range(5,384,16):
                     layer_no = int((i-5)/16)
                     norm['layer_'+ str(layer_no)] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][i:i+16], max_norm=args.grad_clipping_norm)
                 norm['cls'] = torch.nn.utils.clip_grad_norm_([param for name, param in model.named_parameters()][388:], max_norm=args.grad_clipping_norm)
+
 
             scaler.step(optimizer)
         # update scaler state machine
