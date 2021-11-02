@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
 metadata:
-  name: "bert-large-training-128k-momentum-job"
+  name: "bert-large-training-128k-job"
 spec:
   pytorchReplicaSpecs:
     Master:
