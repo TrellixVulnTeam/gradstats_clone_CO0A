@@ -711,7 +711,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                     torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if '.pooler.' in n]), 2.0)
                 for layer in range(0,24):
                     pattern = 'layer.'+ str(layer)
-                    norm['grad_layer_'+layer+'_2norm'] = torch.norm(
+                    norm['grad_layer_'+str(layer)+'_2norm'] = torch.norm(
                         torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
                                       pattern in n]), 2.0)
 
@@ -740,7 +740,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                     torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if '.pooler.' in n]), 2.0)
                 for layer in range(0,24):
                     pattern = 'layer.'+ str(layer)
-                    norm['weight_layer_'+layer+'_2norm'] = torch.norm(
+                    norm['weight_layer_'+ str(layer) +'_2norm'] = torch.norm(
                         torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if
                                       pattern in n]), 2.0)
 
