@@ -758,6 +758,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                 norm['weight_LayerNorm_act_Inf_norm'] = torch.norm(
                     torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.LayerNorm.' in n]),float('inf'))
 
+                norm['total_grad_norm'] = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clipping_norm)
 
             scaler.step(optimizer)
         # update scaler state machine
