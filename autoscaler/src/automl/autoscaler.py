@@ -603,8 +603,8 @@ class AdaScale(Optimizer):
             np.isnan(np.sum(total_grad_sqr)) or \
             np.isinf(np.sum(total_grad_sqr)):
             torch.clamp_(self._gain_invalid, min=1)
-            grad_var = self._grad_var_avg(0)
-            grad_sqr = self._grad_sqr_avg(0)
+            grad_var = [self._grad_var_avg(0)]
+            grad_sqr = [self._grad_sqr_avg(0)]
         else:
             if S > 1:
                 grad_var = local_grad_sqr * (S / cN) / (cN - 1) - total_grad_sqr * S / (cN - 1)
@@ -622,10 +622,6 @@ class AdaScale(Optimizer):
             #grad_var = np.maximum(grad_var, 1e-6)
             grad_sqr = np.maximum(grad_sqr, 0.0)
 
-            # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
-            self._nonsmooth_var = grad_var
-            self._nonsmooth_sqr = grad_sqr
-
             if found_outlier or \
                     np.any(grad_var <= 0.) or \
                     np.any(grad_sqr < 0.) or \
@@ -637,6 +633,10 @@ class AdaScale(Optimizer):
                     print('gradient inf/nan skipping update of moving averages of grad moments', grad_var, grad_sqr)
                     print(found_outlier, local_grad_sqr, S, cN, total_grad_sqr, self._current_loss_scale(), 'sqr:', grad_sqr, 'var:', grad_var)
                 self._gain_invalid[0] = 1
+            
+        # for tensorboard (mostly to catch abnormal values, for all calculations smoothed values are used)
+        self._nonsmooth_var = grad_var
+        self._nonsmooth_sqr = grad_sqr
 
         # ALL CASES FOR INVALID GAIN ARE ON common stats so all workers should avoid update
         # no need to sync invalid state
@@ -843,7 +843,8 @@ class AdaScale(Optimizer):
             phase=""
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         scale_invariant_steps = adascale_state['scale_invariant_steps']
-        self._summary_writer.add_scalar(f'Train{phase}/Real Iterations', real_iteration, scale_invariant_steps)
+        #TODO: check if this breaks ResNet implementation
+        self._summary_writer.add_scalar(f'Train{phase}/Real Iterations', self._real_iterations, scale_invariant_steps)
         self._summary_writer.add_scalar(f'Train{phase}/gain', self._gain, scale_invariant_steps)
         self._summary_writer.add_scalar(f'Train{phase}/var_curr', self._nonsmooth_var[0], scale_invariant_steps)
         self._summary_writer.add_scalar(f'Train{phase}/sqr_curr', self._nonsmooth_sqr[0], scale_invariant_steps)
