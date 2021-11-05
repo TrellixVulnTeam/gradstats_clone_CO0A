@@ -442,7 +442,13 @@ def parse_arguments():
                         default=None,
                         help='Gradient clipping norm.')
 
-
+    parser.add_argument(
+        '--clip_global',
+        default=True,
+        action='store_true',
+        help=
+        'Whether to clip gradients layer wise or globally across model'
+    )
     #FIXME: make part of checkpoint - hack to do deal with the PVRE reboot stupidity
     parser.add_argument('--scale_invariant_steps',
                         type=float,
@@ -702,18 +708,21 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                 scaler.unscale_(optimizer)
                 # Just log the norms of gradients, do not clip
                 device = [param for name, param in model.named_parameters()][0:1][0].grad.device
-                # Gradients Log 2 norm layer wise
-                norm['grad_embedding_2norm'] = torch.norm(
-                    torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if 'embeddings' in n]),2.0)
-                norm['grad_cls_2norm'] = torch.norm(
-                    torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if 'cls.' in n]), 2.0)
-                norm['grad_pooler_2norm'] = torch.norm(
-                    torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if '.pooler.' in n]), 2.0)
+
+
+                # Gradients Inf  norm layer wise
+                norm['grad_embedding_inf_norm'] = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if 'embeddings' in n]), float('inf'))
+                norm['grad_cls_inf_norm'] = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if 'cls.' in n]), float('inf'))
+                norm['grad_pooler_inf_norm'] = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.pooler.' in n]), float('inf'))
                 for layer in range(0,24):
                     pattern = 'layer.'+ str(layer)
-                    norm['grad_layer_'+str(layer)+'_2norm'] = torch.norm(
-                        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                                      pattern in n]), 2.0)
+                    norm['grad_layer_'+str(layer)+'_inf_norm'] = torch.norm(
+                        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                                      pattern in n]), float('inf'))
+
 
                 # Log inf norm parameter wise grads
                 norm['grad_embedding_Inf_norm'] = torch.norm(
@@ -724,8 +733,10 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                     torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if 'key.' in n]),float('inf'))
                 norm['grad_value_Inf_norm'] = torch.norm(
                     torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.value.' in n]),float('inf'))
-                norm['grad_dense_act_Inf_norm'] = torch.norm(
+                norm['grad_dense_Inf_norm'] = torch.norm(
                     torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.dense.' in n]),float('inf'))
+                norm['grad_dense_act_Inf_norm'] = torch.norm(
+                    torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.dense_act.' in n]),float('inf'))
                 norm['grad_LayerNorm_act_Inf_norm'] = torch.norm(
                     torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.LayerNorm.' in n]),float('inf'))
 
@@ -758,7 +769,39 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                 norm['weight_LayerNorm_act_Inf_norm'] = torch.norm(
                     torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if '.LayerNorm.' in n]),float('inf'))
 
-                norm['total_grad_norm'] = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.grad_clipping_norm)
+                if args.clip_global:
+
+                    # Gradients Log 2 norm layer wise
+                    norm['grad_embedding_2norm'] = torch.norm(
+                        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                                     'embeddings' in n]), 2.0)
+                    norm['grad_cls_2norm'] = torch.norm(
+                        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                                     'cls.' in n]), 2.0)
+                    norm['grad_pooler_2norm'] = torch.norm(
+                        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                                     '.pooler.' in n]), 2.0)
+                    for layer in range(0, 24):
+                        pattern = 'layer.' + str(layer)
+                        norm['grad_layer_' + str(layer) + '_2norm'] = torch.norm(
+                            torch.stack(
+                                [torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                                 pattern in n]), 2.0)
+                    norm['total_grad_norm'] = torch.nn.utils.clip_grad_norm_(model.parameters(),
+                                                                         max_norm=args.grad_clipping_norm)
+
+                else:
+                    # Layer wise clipping
+                    norm['grad_embedding_2norm'] = torch.nn.utils.clip_grad_norm_(
+                        [param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
+                    for i in range(5, 384, 16):
+                        layer_no = int((i - 5) / 16)
+                        norm['grad_layer_' + str(layer_no) + '_2norm'] = torch.nn.utils.clip_grad_norm_(
+                            [param for name, param in model.named_parameters()][i:i + 16],
+                            max_norm=args.grad_clipping_norm)
+                    norm['grad_cls_2norm'] = torch.nn.utils.clip_grad_norm_(
+                        [param for name, param in model.named_parameters()][388:], max_norm=args.grad_clipping_norm)
+
 
             scaler.step(optimizer)
         # update scaler state machine
