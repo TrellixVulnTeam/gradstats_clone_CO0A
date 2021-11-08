@@ -107,6 +107,11 @@ INIT_CHECKPOINT=""
 if [ "$init_checkpoint" != "None" ] ; then
    INIT_CHECKPOINT="--init_checkpoint=$init_checkpoint"
 fi
+CHECKPOINT=""
+if [ "$clip_globalg" == "true" ] ; then
+   CLIP_GLOBAL_NORM="--clip_global"
+fi
+
  
 echo $DATA_DIR_PHASE1
 INPUT_DIR=$DATA_DIR_PHASE1
@@ -141,7 +146,8 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --log_dir ${TB_DIR} "
 CMD+=" --bucket ${BUCKET} "
 CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
-CMD+=" --clip_global ${clip_global} "
+CMD+=" $CLIP_GLOBAL_NORM"
+
 
 # # set up environment variables for Torch DistributedDataParallel
 WORLD_SIZE=$SLURM_NTASKS

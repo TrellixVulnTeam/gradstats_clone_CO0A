@@ -444,7 +444,7 @@ def parse_arguments():
 
     parser.add_argument(
         '--clip_global',
-        default=True,
+        default=False,
         action='store_true',
         help=
         'Whether to clip gradients layer wise or globally across model'
