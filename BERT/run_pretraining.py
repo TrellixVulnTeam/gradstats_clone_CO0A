@@ -771,7 +771,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
 
                 if args.clip_global:
 
-                    # Gradients Log 2 norm layer wise
+                    # Gradients clip globally, first log 2 norm and then clip globally
                     norm['grad_embedding_2norm'] = torch.norm(
                         torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
                                      'embeddings' in n]), 2.0)
