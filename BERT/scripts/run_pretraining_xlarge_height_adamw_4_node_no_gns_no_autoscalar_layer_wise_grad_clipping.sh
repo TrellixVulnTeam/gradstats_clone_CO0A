@@ -47,7 +47,7 @@ init_checkpoint=${24:-"None"}
 grad_clipping_norm=${25:-"1.0"}
 clip_global=${26:-"false"}
 
-RESULTS_DIR=$CODEDIR/results/pretrain_large_4node_adam_grad_clipping_layerwise
+RESULTS_DIR=$CODEDIR/results/pretrain_xlarge_height_4node_adam_grad_clipping_layerwise
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 TB_DIR=$RESULTS_DIR/tensorboard_phase1
 BUCKET=mansmane-us-west-2
