@@ -913,7 +913,7 @@ def main():
                                 print("Failed to push to S3")
                         # reset average loss for next print loop
                         average_loss = 0
-                    if adascale_step > args.steps_this_run or \
+                    if adascale_step >= args.steps_this_run or \
                             training_steps % (args.num_steps_per_checkpoint * args.gradient_accumulation_steps) == 0 or \
                             timeout_sent:
                         if is_main_process() and not args.skip_checkpoint:
