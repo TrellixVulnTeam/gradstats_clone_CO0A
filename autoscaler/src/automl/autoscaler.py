@@ -150,14 +150,19 @@ class AdaScale(Optimizer):
             },
         )
 
-        if self._adjust_momentum:
-            if self._is_adaptive:
-                # adjust beta1 according to scale
-                for pg_idx, param_group in enumerate(self._optimizer.param_groups):
-                    beta1, beta2 = param_group['betas']
-                    adjusted_beta1 = 1 - (1-beta1)/self._scale
-                    self._optimizer.param_groups[pg_idx]['betas'] = (adjusted_beta1, beta2)
-                    print("ADJUSTED BETA1 TO", adjusted_beta1)
+#        if self._adjust_momentum:
+#            if self._is_adaptive:
+#                # adjust beta1 according to scale
+#                for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+#                    beta1, beta2 = param_group['betas']
+#                    adjusted_beta1 = 1 - (1-beta1)/self._scale
+#                    self._optimizer.param_groups[pg_idx]['betas'] = (adjusted_beta1, beta2)
+#                    print("ADJUSTED BETA1 TO", adjusted_beta1)
+        # Since this in c-tor the hps here are always scale one hps (before ckpt is loaded, if any)
+        if self._is_adaptive:
+            # save scale one beta1 for momentum adjustment later on (assuming all param groups have same betas)
+            self._scale_one_beta1 = self._optimizer.param_groups[0]['betas'][0]
+            self._adjusted_beta1 = self._scale_one_beta1
 
         # Adding for O2 level of AMP
         self.state = self._optimizer.state
@@ -397,6 +402,16 @@ class AdaScale(Optimizer):
         self._gain = gain
         return gain
 
+    def _set_momentum(self, scale):
+        if self._is_adaptive:
+            # adjust beta1 according to scale
+            for pg_idx, param_group in enumerate(self._optimizer.param_groups):
+                beta1, beta2 = param_group['betas']
+                adjusted_beta1 = 1 - (1 - self._scale_one_beta1) / scale
+                self._optimizer.param_groups[pg_idx]['betas'] = (adjusted_beta1, beta2)
+                # print("ADJUSTED BETA1 TO", adjusted_beta1)
+                self._adjusted_beta1 = adjusted_beta1
+
 
     def gns(self, pg_idx: Optional[int] = None) -> float:
         """
@@ -414,7 +429,7 @@ class AdaScale(Optimizer):
         adascale_state = self._optimizer.state_dict()['state']['adascale']
         if self._real_iterations < self._MIN_STEPS:
             # allow averages to stabilize before predicting
-            self._gns = self._current_batch_size # self._scale_one_batch_size
+            self._gns = self._scale_one_batch_size # self._current_batch_size 
             self._update_avg("gns_avg", np.array([self._gns]), 0.9)
             return self._gns
         if self._gain_invalid[0] != 0:
@@ -431,6 +446,10 @@ class AdaScale(Optimizer):
         # self._gns = gns * self.temperature
         self._update_avg("gns_avg", np.array([self._gns]), 0.9)
         self._averaged_gns = int(adascale_state["gns_avg"][0])
+        # adjust momentum based on GNS
+        predicted_scale = np.ceil(self._averaged_gns / self._scale_one_batch_size) - 1
+        if self._adjust_momentum and predicted_scale > 1:
+            self._set_momentum(predicted_scale)
         return self._averaged_gns
 
 
@@ -857,7 +876,7 @@ class AdaScale(Optimizer):
         # self._summary_writer.add_scalar('Train{phase}/local_grad_sqr', self.local_grad_sqr[0]/self._num_grad_samples, scale_invariant_steps)
         self._summary_writer.add_scalar(f'Train{phase}/GNS_si', self._gns, scale_invariant_steps)
         self._summary_writer.add_scalar(f'Train{phase}/clipnorm', self._clipnorm, scale_invariant_steps)
-
+        self._summary_writer.add_scalar(f'Train{phase}/adjusted_beta1', self._adjusted_beta1, scale_invariant_steps)
         # plot real iterations here
         if self._enable_debug:
             self._summary_writer.add_scalar(f'Train{phase}/var', self._var, real_iteration)
