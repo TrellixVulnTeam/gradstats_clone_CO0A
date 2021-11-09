@@ -466,6 +466,11 @@ def parse_arguments():
     if args.steps_this_run < 0:
         args.steps_this_run = args.max_steps
 
+    if args.clip_global:
+        print(" ### Clipping gradients globally ")
+    else:
+        print(" ### Clipping gradients locally ")
+
     return args
 
 
@@ -794,7 +799,7 @@ def take_optimizer_step(args, scaler, optimizer, model, global_step):
                     # Layer wise clipping
                     norm['grad_embedding_2norm'] = torch.nn.utils.clip_grad_norm_(
                         [param for name, param in model.named_parameters()][0:5], max_norm=args.grad_clipping_norm)
-                    for i in range(5, 384, 16):
+                    for i in range(5, 388, 16):
                         layer_no = int((i - 5) / 16)
                         norm['grad_layer_' + str(layer_no) + '_2norm'] = torch.nn.utils.clip_grad_norm_(
                             [param for name, param in model.named_parameters()][i:i + 16],
