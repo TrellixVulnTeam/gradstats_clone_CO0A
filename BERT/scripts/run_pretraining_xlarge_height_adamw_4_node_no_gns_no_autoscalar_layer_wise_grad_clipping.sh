@@ -107,7 +107,7 @@ INIT_CHECKPOINT=""
 if [ "$init_checkpoint" != "None" ] ; then
    INIT_CHECKPOINT="--init_checkpoint=$init_checkpoint"
 fi
-CHECKPOINT=""
+CLIP_GLOBAL_NORM=""
 if [ "$clip_globalg" == "true" ] ; then
    CLIP_GLOBAL_NORM="--clip_global"
 fi
@@ -252,7 +252,7 @@ echo "finished pretraining"
  CMD+=" --log_dir ${TB_DIR} "
  CMD+=" --bucket ${BUCKET} "
  CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
-CMD+=" --clip_global ${clip_global} "
+CMD+=" $CLIP_GLOBAL_NORM"
 
 
  CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
