@@ -45,6 +45,8 @@ DATA_DIR_PHASE2=//home/ubuntu/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DI
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
 grad_clipping_norm=${25:-"1.0"}
+clip_global=${26:-"false"}
+
 RESULTS_DIR=$CODEDIR/results/pretrain_large_4node_adam_grad_clipping_layerwise
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 TB_DIR=$RESULTS_DIR/tensorboard_phase1
@@ -105,7 +107,12 @@ INIT_CHECKPOINT=""
 if [ "$init_checkpoint" != "None" ] ; then
    INIT_CHECKPOINT="--init_checkpoint=$init_checkpoint"
 fi
- 
+
+CLIP_GLOBAL_NORM=""
+if [ "$clip_globalg" == "true" ] ; then
+   CLIP_GLOBAL_NORM="--clip_global"
+fi
+
 echo $DATA_DIR_PHASE1
 INPUT_DIR=$DATA_DIR_PHASE1
 CMD=" $CODEDIR/run_pretraining.py"
@@ -139,6 +146,7 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 CMD+=" --log_dir ${TB_DIR} "
 CMD+=" --bucket ${BUCKET} "
 CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
+CMD+=" $CLIP_GLOBAL_NORM"
 
 # # set up environment variables for Torch DistributedDataParallel
 WORLD_SIZE=$SLURM_NTASKS
@@ -243,6 +251,7 @@ echo "finished pretraining"
  CMD+=" --log_dir ${TB_DIR} "
  CMD+=" --bucket ${BUCKET} "
  CMD+=" --grad_clipping_norm ${grad_clipping_norm} "
+ CMD+=" $CLIP_GLOBAL_NORM"
 
 
  CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$PROC_PER_NODE --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
