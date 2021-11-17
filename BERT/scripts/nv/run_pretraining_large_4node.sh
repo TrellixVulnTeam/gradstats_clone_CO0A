@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 source /fsx/conda/bin/activate /home/ubuntu/anaconda3/envs/pytorch_latest_p37/
-
-train_batch_size=${1:-8192}
+# Total batch size = train_batch_size * ngpus
+train_batch_size=${1:-2048} # Batch size per GPU used for training (after accumulation)
 learning_rate=${2:-"6e-3"}
 precision=${3:-"fp16"}
 num_gpus=${4:-8}
@@ -24,16 +24,16 @@ save_checkpoint_steps=${7:-200}
 resume_training=${8:-"false"}
 create_logfile=${9:-"true"}
 accumulate_gradients=${10:-"true"}
-gradient_accumulation_steps=${11:-128}
+gradient_accumulation_steps=${11:-32}
 seed=${12:-12439}
-job_name=${13:-"bert_lamb_pretraining"}
+job_name=${13:-"bert_large_lamb_pretraining_overflow_cheks"}
 allreduce_post_accumulation=${14:-"true"}
 allreduce_post_accumulation_fp16=${15:-"true"}
-train_batch_size_phase2=${16:-4096}
+train_batch_size_phase2=${16:-1024}
 learning_rate_phase2=${17:-"4e-3"}
 warmup_proportion_phase2=${18:-"0.128"}
 train_steps_phase2=${19:-1563}
-gradient_accumulation_steps_phase2=${20:-512}
+gradient_accumulation_steps_phase2=${20:-128}
 DATASET=books_wiki_en_corpus # change this for other datasets
 DATA_DIR_PHASE1=/home/ubuntu/data/nlp/BERT/phase1/ #${21:-$BERT_PREP_WORKING_DIR/${DATASET}/}
 BERT_CONFIG=/fsx/code/gradstats/BERT/bert_config.json
@@ -41,7 +41,7 @@ DATASET2=books_wiki_en_corpus # change this for other datasets
 DATA_DIR_PHASE2=/home/ubuntu/data/nlp/BERT/phase2/ #${22:-$BERT_PREP_WORKING_DIR/${DATASET2}/}
 CODEDIR=${23:-"/fsx/code/gradstats/BERT/"}
 init_checkpoint=${24:-"None"}
-RESULTS_DIR=$CODEDIR/results
+RESULTS_DIR=$CODEDIR/results/${job_name}
 
 CHECKPOINTS_DIR=$RESULTS_DIR/checkpoints
 
@@ -128,7 +128,20 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 TB_DIR=$RESULTS_DIR/tensorboard_phase1
 CMD+=" --log_dir ${TB_DIR} "
 
-CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
+# # set up environment variables for Torch DistributedDataParallel
+WORLD_SIZE=$SLURM_NTASKS
+RANK=$SLURM_NODEID
+PROC_PER_NODE=8
+MASTER_ADDR_JOB=$SLURM_SUBMIT_HOST
+MASTER_PORT_JOB="12244"
+
+# setup NCCL to use EFA
+export FI_PROVIDER=efa
+export FI_EFA_TX_MIN_CREDITS=64
+export NCCL_DEBUG=INFO
+
+
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$num_gpus --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 
 if [ "$create_logfile" = "true" ] ; then
@@ -206,21 +219,10 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 TB_DIR=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
 
-# # set up environment variables for Torch DistributedDataParallel
-WORLD_SIZE=$SLURM_NTASKS
-RANK=$SLURM_NODEID
-PROC_PER_NODE=8
-MASTER_ADDR_JOB=$SLURM_SUBMIT_HOST
-MASTER_PORT_JOB="12244"
-
-# setup NCCL to use EFA
-export FI_PROVIDER=efa
-export FI_EFA_TX_MIN_CREDITS=64
-export NCCL_DEBUG=INFO
 
 
 
-CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
+CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$num_gpus --nnodes=$WORLD_SIZE --node_rank=${RANK} --master_addr=${MASTER_ADDR_JOB} --master_port=${MASTER_PORT_JOB} $CMD"
 
 if [ "$create_logfile" = "true" ] ; then
   export GBS=$(expr $train_batch_size_phase2 \* $num_gpus)
