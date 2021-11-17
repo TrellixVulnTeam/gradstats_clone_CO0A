@@ -36,6 +36,7 @@ from torch.utils.data.distributed import DistributedSampler
 import math
 from apex import amp
 import multiprocessing
+from collections import defaultdict
 
 from tokenization import BertTokenizer
 import modeling
@@ -449,6 +450,7 @@ def prepare_model_and_optimizer(args, device):
 
 def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
     global skipped_steps
+    norm = defaultdict()
     if args.allreduce_post_accumulation:
         # manually allreduce gradients after all accumulation steps
         # check for Inf/NaN

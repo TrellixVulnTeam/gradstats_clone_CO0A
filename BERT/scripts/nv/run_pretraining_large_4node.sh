@@ -206,6 +206,20 @@ CMD+=" --json-summary ${RESULTS_DIR}/dllogger.json "
 TB_DIR=$RESULTS_DIR/tensorboard_phase2
 CMD+=" --log_dir ${TB_DIR} "
 
+# # set up environment variables for Torch DistributedDataParallel
+WORLD_SIZE=$SLURM_NTASKS
+RANK=$SLURM_NODEID
+PROC_PER_NODE=8
+MASTER_ADDR_JOB=$SLURM_SUBMIT_HOST
+MASTER_PORT_JOB="12244"
+
+# setup NCCL to use EFA
+export FI_PROVIDER=efa
+export FI_EFA_TX_MIN_CREDITS=64
+export NCCL_DEBUG=INFO
+
+
+
 CMD="/home/ubuntu/anaconda3/envs/pytorch_latest_p37/bin/python3 -m torch.distributed.launch --nproc_per_node=$num_gpus $CMD"
 
 if [ "$create_logfile" = "true" ] ; then
