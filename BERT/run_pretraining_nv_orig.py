@@ -756,7 +756,7 @@ def main():
 
                             # Only for main process log tensorboard summary
                             writer.add_scalar('Train/Loss', average_loss, global_step)
-                            writer.add_scalar('Train/Learning Rate', learning_rate, global_step)
+                            writer.add_scalar('Train/Learning Rate', optimizer.param_groups[0]['lr'], global_step)
                             for key, value in grad_norm.items():
                                 writer.add_scalar('Train/' + key, value, global_step)
 
