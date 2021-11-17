@@ -395,9 +395,8 @@ def prepare_model_and_optimizer(args, device):
 
     optimizer = FusedLAMB(optimizer_grouped_parameters,
                           lr=args.learning_rate)
-    if is_main_process():
-        args.tensorboard_path = f'{args.log_dir}/worker-{torch.distributed.get_rank()}'
-        writer = SummaryWriter(args.tensorboard_path)
+    args.tensorboard_path = f'{args.log_dir}/worker-{torch.distributed.get_rank()}'
+    writer = SummaryWriter(args.tensorboard_path)
 
     lr_scheduler = PolyWarmUpScheduler(optimizer,
                                        warmup=args.warmup_proportion,
@@ -804,6 +803,7 @@ def main():
                 train_dataloader, data_file = dataset_future.result(timeout=None)
 
             epoch += 1
+        writer.close()
 
 
 if __name__ == "__main__":
