@@ -604,7 +604,7 @@ def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
             param.grad = None
         global_step += 1
 
-    return global_step
+    return global_step, norm
 
 
 def main():
@@ -733,7 +733,7 @@ def main():
 
                     if training_steps % args.gradient_accumulation_steps == 0:
                         lr_scheduler.step()  # learning rate warmup
-                        global_step = take_optimizer_step(args, optimizer, model, overflow_buf, global_step)
+                        global_step, grad_norm = take_optimizer_step(args, optimizer, model, overflow_buf, global_step)
 
                     if global_step >= args.steps_this_run or timeout_sent:
                         train_time_raw = time.time() - raw_train_start
