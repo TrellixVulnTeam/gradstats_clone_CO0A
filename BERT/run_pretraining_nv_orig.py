@@ -447,10 +447,108 @@ def prepare_model_and_optimizer(args, device):
 
     return model, optimizer, lr_scheduler, checkpoint, global_step, criterion, writer
 
+def calculate_norms(model):
+    # 6.1 log norms
+    device = [param for name, param in model.named_parameters()][0:1][0].grad.device
+    norm = defaultdict()
+    # Gradients Inf  norm layer wise
+    norm['grad_embedding_inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'embeddings' in n]), float('inf'))
+    norm['grad_cls_inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'cls.' in n]), float('inf'))
+    norm['grad_pooler_inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.pooler.' in n]), float('inf'))
+    for layer in range(0, 24):
+        pattern = 'layer.' + str(layer)
+        norm['grad_layer_' + str(layer) + '_inf_norm'] = torch.norm(
+            torch.stack(
+                [torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                 pattern in n]), float('inf'))
+
+    # Log inf norm parameter wise grads
+    norm['grad_embedding_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'embeddings' in n]), float('inf'))
+    norm['grad_query_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'query.' in n]), float('inf'))
+    norm['grad_key_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'key.' in n]), float('inf'))
+    norm['grad_value_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.value.' in n]), float('inf'))
+    norm['grad_dense_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.dense.' in n]), float('inf'))
+    norm['grad_dense_act_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.dense_act.' in n]), float('inf'))
+    norm['grad_LayerNorm_act_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.LayerNorm.' in n]), float('inf'))
+
+    # Weights Log 2 norm layer wise
+    norm['weight_embedding_2norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                     'embeddings' in n]), 2.0)
+    norm['weight_cls_2norm'] = torch.norm(
+        torch.stack(
+            [torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if 'cls.' in n]), 2.0)
+    norm['weight_pooler_2norm'] = torch.norm(
+        torch.stack(
+            [torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if '.pooler.' in n]),
+        2.0)
+    for layer in range(0, 24):
+        pattern = 'layer.' + str(layer)
+        norm['weight_layer_' + str(layer) + '_2norm'] = torch.norm(
+            torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                         pattern in n]), 2.0)
+
+    # Weights inf norm parameter wise
+    norm['weight_embedding_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'embeddings' in n]), float('inf'))
+    norm['weight_query_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'query.' in n]), float('inf'))
+    norm['weight_key_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     'key.' in n]), float('inf'))
+    norm['weight_value_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.value.' in n]), float('inf'))
+    norm['weight_dense_act_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.dense.' in n]), float('inf'))
+    norm['weight_LayerNorm_act_Inf_norm'] = torch.norm(
+        torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
+                     '.LayerNorm.' in n]), float('inf'))
+
+    # Log 2 norm of gradients layerwise
+    norm['grad_embedding_2norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                     'embeddings' in n]), 2.0)
+    norm['grad_cls_2norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                     'cls.' in n]), 2.0)
+    norm['grad_pooler_2norm'] = torch.norm(
+        torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                     '.pooler.' in n]), 2.0)
+    for layer in range(0, 24):
+        pattern = 'layer.' + str(layer)
+        norm['grad_layer_' + str(layer) + '_2norm'] = torch.norm(
+            torch.stack(
+                [torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
+                 pattern in n]), 2.0)
+    return norm
 
 def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
     global skipped_steps
-    norm = defaultdict()
+
     if args.allreduce_post_accumulation:
         # manually allreduce gradients after all accumulation steps
         # check for Inf/NaN
@@ -485,103 +583,7 @@ def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
         else:
             had_overflow = 0
         # 6. call optimizer step function
-        # 6.1 log norms
-        device = [param for name, param in model.named_parameters()][0:1][0].grad.device
-
-        # Gradients Inf  norm layer wise
-        norm['grad_embedding_inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'embeddings' in n]), float('inf'))
-        norm['grad_cls_inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'cls.' in n]), float('inf'))
-        norm['grad_pooler_inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.pooler.' in n]), float('inf'))
-        for layer in range(0, 24):
-            pattern = 'layer.' + str(layer)
-            norm['grad_layer_' + str(layer) + '_inf_norm'] = torch.norm(
-                torch.stack(
-                    [torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                     pattern in n]), float('inf'))
-
-        # Log inf norm parameter wise grads
-        norm['grad_embedding_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'embeddings' in n]), float('inf'))
-        norm['grad_query_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'query.' in n]), float('inf'))
-        norm['grad_key_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'key.' in n]), float('inf'))
-        norm['grad_value_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.value.' in n]), float('inf'))
-        norm['grad_dense_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.dense.' in n]), float('inf'))
-        norm['grad_dense_act_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.dense_act.' in n]), float('inf'))
-        norm['grad_LayerNorm_act_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.LayerNorm.' in n]), float('inf'))
-
-        # Weights Log 2 norm layer wise
-        norm['weight_embedding_2norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                         'embeddings' in n]), 2.0)
-        norm['weight_cls_2norm'] = torch.norm(
-            torch.stack(
-                [torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if 'cls.' in n]), 2.0)
-        norm['weight_pooler_2norm'] = torch.norm(
-            torch.stack(
-                [torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if '.pooler.' in n]),
-            2.0)
-        for layer in range(0, 24):
-            pattern = 'layer.' + str(layer)
-            norm['weight_layer_' + str(layer) + '_2norm'] = torch.norm(
-                torch.stack([torch.norm(p.data.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                             pattern in n]), 2.0)
-
-        # Weights inf norm parameter wise
-        norm['weight_embedding_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'embeddings' in n]), float('inf'))
-        norm['weight_query_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'query.' in n]), float('inf'))
-        norm['weight_key_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         'key.' in n]), float('inf'))
-        norm['weight_value_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.value.' in n]), float('inf'))
-        norm['weight_dense_act_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.dense.' in n]), float('inf'))
-        norm['weight_LayerNorm_act_Inf_norm'] = torch.norm(
-            torch.stack([torch.norm(p.data.detach(), float('inf')).to(device) for n, p in model.named_parameters() if
-                         '.LayerNorm.' in n]), float('inf'))
-
-        # Log 2 norm of gradients layerwise
-        norm['grad_embedding_2norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                         'embeddings' in n]), 2.0)
-        norm['grad_cls_2norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                         'cls.' in n]), 2.0)
-        norm['grad_pooler_2norm'] = torch.norm(
-            torch.stack([torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                         '.pooler.' in n]), 2.0)
-        for layer in range(0, 24):
-            pattern = 'layer.' + str(layer)
-            norm['grad_layer_' + str(layer) + '_2norm'] = torch.norm(
-                torch.stack(
-                    [torch.norm(p.grad.detach(), 2.0).to(device) for n, p in model.named_parameters() if
-                     pattern in n]), 2.0)
-
+        norm = calculate_norms(model)
 
         if had_overflow == 0:
             optimizer.step()
@@ -598,6 +600,7 @@ def take_optimizer_step(args, optimizer, model, overflow_buf, global_step):
         for param in model.parameters():
             param.grad = None
     else:
+        norm = calculate_norms(model)
         optimizer.step()
         # optimizer.zero_grad()
         for param in model.parameters():
