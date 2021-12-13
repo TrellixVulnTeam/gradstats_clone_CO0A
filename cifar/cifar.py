@@ -153,7 +153,7 @@ def main():
             outputs = ddp_model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
-            print("Optimizer gain", optim.gain())
+            print("Optimizer gain", optimizer.gain())
             optimizer.step()
             end = time.time()
             step_times.append((end-start)*100)
