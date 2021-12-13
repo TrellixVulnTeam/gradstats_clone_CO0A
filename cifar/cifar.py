@@ -12,7 +12,8 @@ import os
 import random
 import numpy as np
 from fairscale.optim import AdaScale
-
+import time
+import statistics
 def set_random_seeds(random_seed=0):
 
     torch.manual_seed(random_seed)
@@ -41,7 +42,7 @@ def evaluate(model, device, test_loader):
 
 
 def main():
-    num_epochs_default = 10000
+    num_epochs_default = 1
     batch_size_default = 256  # 1024
     learning_rate_default = 0.1
     random_seed_default = 0
@@ -128,7 +129,7 @@ def main():
         optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
     else:
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
-
+    step_times = []
     # Loop over the dataset multiple times
     for epoch in range(num_epochs):
 
@@ -148,10 +149,18 @@ def main():
         for data in train_loader:
             inputs, labels = data[0].to(device), data[1].to(device)
             optimizer.zero_grad()
+            start = time.time()
             outputs = ddp_model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
+            print("Optimizer gain", optim.gain())
             optimizer.step()
+            end = time.time()
+            step_times.append((end-start)*100)
+    print(step_times)
+    print("INFO: Std dev", statistics.stdev(step_times))
+    print("INFO: Mean", statistics.mean(step_times))
+
 
 
 if __name__ == "__main__":
