@@ -124,12 +124,12 @@ def main():
     test_loader = DataLoader(dataset=test_set, batch_size=128, shuffle=False, num_workers=8)
 
     criterion = nn.CrossEntropyLoss()
-    if use_adascale:
-        print(" INFO: Using Adascale ")
-        optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
-    else:
-        optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
-    step_times = []
+    # if use_adascale:
+    print(" INFO: Using Adascale ")
+    optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
+    # else:
+    #     optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
+    # step_times = []
     # Loop over the dataset multiple times
     for epoch in range(num_epochs):
 
