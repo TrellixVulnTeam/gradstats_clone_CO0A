@@ -59,6 +59,7 @@ def main():
     parser.add_argument("--model_dir", type=str, help="Directory for saving models.", default=model_dir_default)
     parser.add_argument("--model_filename", type=str, help="Model filename.", default=model_filename_default)
     parser.add_argument("--resume", action="store_true", help="Resume training from saved checkpoint.")
+    parser.add_argument("--use_adascale", action="store_true", help="Use adascale optimizer for training.")
     argv = parser.parse_args()
 
     local_rank = argv.local_rank
@@ -120,7 +121,10 @@ def main():
     test_loader = DataLoader(dataset=test_set, batch_size=128, shuffle=False, num_workers=8)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
+    if use_adascale:
+        optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
+    else:
+        optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
 
     # Loop over the dataset multiple times
     for epoch in range(num_epochs):
