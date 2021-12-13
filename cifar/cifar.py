@@ -70,6 +70,7 @@ def main():
     model_dir = argv.model_dir
     model_filename = argv.model_filename
     resume = argv.resume
+    use_adascale = argv.use_adascale
 
     # Create directories outside the PyTorch program
     # Do not create directory here because it is not multiprocess safe
