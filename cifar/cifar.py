@@ -11,6 +11,7 @@ import argparse
 import os
 import random
 import numpy as np
+from fairscale.optim import AdaScale
 
 def set_random_seeds(random_seed=0):
 
@@ -123,6 +124,7 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     if use_adascale:
+        print(" INFO: Using Adascale ")
         optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
     else:
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
