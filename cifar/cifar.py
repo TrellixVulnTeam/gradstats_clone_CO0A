@@ -124,42 +124,42 @@ def main():
     test_loader = DataLoader(dataset=test_set, batch_size=128, shuffle=False, num_workers=8)
 
     criterion = nn.CrossEntropyLoss()
-    # if use_adascale:
-    print(" INFO: Using Adascale ")
-    optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
-    # else:
-    #     optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
-    # step_times = []
-    # Loop over the dataset multiple times
-    for epoch in range(num_epochs):
-
-        print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
-
-        # Save and evaluate model routinely
-        if epoch % 10 == 0:
-            if local_rank == 0:
-                accuracy = evaluate(model=ddp_model, device=device, test_loader=test_loader)
-                torch.save(ddp_model.state_dict(), model_filepath)
-                print("-" * 75)
-                print("Epoch: {}, Accuracy: {}".format(epoch, accuracy))
-                print("-" * 75)
-
-        ddp_model.train()
-
-        for data in train_loader:
-            inputs, labels = data[0].to(device), data[1].to(device)
-            optimizer.zero_grad()
-            start = time.time()
-            outputs = ddp_model(inputs)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            print("Optimizer gain", optimizer.gain())
-            optimizer.step()
-            end = time.time()
-            step_times.append((end-start)*100)
-    print(step_times)
-    print("INFO: Std dev", statistics.stdev(step_times))
-    print("INFO: Mean", statistics.mean(step_times))
+    if use_adascale:
+        print(" INFO: Using Adascale ")
+        optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
+    else:
+        optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
+    step_times = []
+    # # Loop over the dataset multiple times
+    # for epoch in range(num_epochs):
+    #
+    #     print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
+    #
+    #     # Save and evaluate model routinely
+    #     if epoch % 10 == 0:
+    #         if local_rank == 0:
+    #             accuracy = evaluate(model=ddp_model, device=device, test_loader=test_loader)
+    #             torch.save(ddp_model.state_dict(), model_filepath)
+    #             print("-" * 75)
+    #             print("Epoch: {}, Accuracy: {}".format(epoch, accuracy))
+    #             print("-" * 75)
+    #
+    #     ddp_model.train()
+    #
+    #     for data in train_loader:
+    #         inputs, labels = data[0].to(device), data[1].to(device)
+    #         optimizer.zero_grad()
+    #         start = time.time()
+    #         outputs = ddp_model(inputs)
+    #         loss = criterion(outputs, labels)
+    #         loss.backward()
+    #         print("Optimizer gain", optimizer.gain())
+    #         optimizer.step()
+    #         end = time.time()
+    #         step_times.append((end-start)*100)
+    # print(step_times)
+    # print("INFO: Std dev", statistics.stdev(step_times))
+    # print("INFO: Mean", statistics.mean(step_times))
 
 
 
