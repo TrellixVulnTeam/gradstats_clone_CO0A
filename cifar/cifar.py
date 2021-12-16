@@ -128,6 +128,7 @@ def main():
         print(" INFO: Using Adascale ")
         optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5))
     else:
+        print(" INFO: Not using Adascale")
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
     step_times = []
     # # Loop over the dataset multiple times
