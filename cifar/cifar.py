@@ -157,7 +157,6 @@ def main():
             torch.cuda.nvtx.range_pop()  # FORWARD-PASS
 
             torch.cuda.nvtx.range_push('BACKWARD-PASS')
-
             loss.backward()
             torch.cuda.nvtx.range_pop()  # BACKWARD-PASS
 
@@ -166,10 +165,10 @@ def main():
             torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
 
             end = time.time()
-            step_times.append((end-start)*100)
+            step_times.append((end-start)*1000)
     print(step_times)
     print("INFO: Std dev", statistics.stdev(step_times))
-    print("INFO: Mean", statistics.mean(step_times))
+    print("INFO: Mean (msec)", statistics.mean(step_times))
 
 
 
