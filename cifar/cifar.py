@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--model_filename", type=str, help="Model filename.", default=model_filename_default)
     parser.add_argument("--resume", action="store_true", help="Resume training from saved checkpoint.")
     parser.add_argument("--use_adascale", action="store_true", help="Use adascale optimizer for training.")
+    parser.add_argument("--use_fp16_compress", action="store_true", help="Use fp16 compression for training.")
     argv = parser.parse_args()
 
     local_rank = argv.local_rank
@@ -76,6 +77,7 @@ def main():
     model_filename = argv.model_filename
     resume = argv.resume
     use_adascale = argv.use_adascale
+    use_fp16_compress = argv.use_fp16_compress
 
     # Create directories outside the PyTorch program
     # Do not create directory here because it is not multiprocess safe
@@ -99,6 +101,8 @@ def main():
     device = torch.device("cuda:{}".format(local_rank))
     model = model.to(device)
     ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank)
+    if use_fp16_compress:
+        model.register_comm_hook(state=None, hook=fp16_compress_hook)
 
     # We only save the model who uses device "cuda:0"
     # To resume, the device for the saved model would also be "cuda:0"
@@ -154,28 +158,29 @@ def main():
         for data in train_loader:
             inputs, labels = data[0].to(device), data[1].to(device)
             optimizer.zero_grad()
-            # start = time.time()
-            # torch.cuda.nvtx.range_push('FORWARD-PASS')
+            start = time.time()
+            torch.cuda.nvtx.range_push('FORWARD-PASS')
             outputs = ddp_model(inputs)
             loss = criterion(outputs, labels)
-            # torch.cuda.nvtx.range_pop()  # FORWARD-PASS
+            torch.cuda.nvtx.range_pop()  # FORWARD-PASS
 
-            # torch.cuda.nvtx.range_push('BACKWARD-PASS')
+            torch.cuda.nvtx.range_push('BACKWARD-PASS')
             loss.backward()
-            # torch.cuda.nvtx.range_pop()  # BACKWARD-PASS
+            torch.cuda.nvtx.range_pop()  # BACKWARD-PASS
 
-            # torch.cuda.nvtx.range_push('OPTIMIZER-STEP')
+            torch.cuda.nvtx.range_push('OPTIMIZER-STEP')
             optimizer.step()
-            # torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
+            torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
             step += 1
 
+
+            end = time.time()
+            step_times.append((end-start)*1000)
     print(" INFO: Total steps: ", step)
 
-    #         end = time.time()
-    #         step_times.append((end-start)*1000)
-    # print(step_times)
-    # print("INFO: Std dev", statistics.stdev(step_times))
-    # print("INFO: Mean (msec)", statistics.mean(step_times))
+    print(step_times)
+    print("INFO: Std dev", statistics.stdev(step_times))
+    print("INFO: Mean (msec)", statistics.mean(step_times))
 
 
 
