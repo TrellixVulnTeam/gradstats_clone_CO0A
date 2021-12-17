@@ -1,3 +1,4 @@
+# Source: https://leimao.github.io/blog/PyTorch-Distributed-Training/
 import torch
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data import DataLoader
@@ -14,6 +15,8 @@ import numpy as np
 from fairscale.optim import AdaScale
 import time
 import statistics
+from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import fp16_compress_hook
+
 def set_random_seeds(random_seed=0):
 
     torch.manual_seed(random_seed)
@@ -132,6 +135,7 @@ def main():
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=0.9, weight_decay=1e-5)
     step_times = []
     # # Loop over the dataset multiple times
+    step = 0
     for epoch in range(num_epochs):
 
         print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
@@ -150,25 +154,28 @@ def main():
         for data in train_loader:
             inputs, labels = data[0].to(device), data[1].to(device)
             optimizer.zero_grad()
-            start = time.time()
-            torch.cuda.nvtx.range_push('FORWARD-PASS')
+            # start = time.time()
+            # torch.cuda.nvtx.range_push('FORWARD-PASS')
             outputs = ddp_model(inputs)
             loss = criterion(outputs, labels)
-            torch.cuda.nvtx.range_pop()  # FORWARD-PASS
+            # torch.cuda.nvtx.range_pop()  # FORWARD-PASS
 
-            torch.cuda.nvtx.range_push('BACKWARD-PASS')
+            # torch.cuda.nvtx.range_push('BACKWARD-PASS')
             loss.backward()
-            torch.cuda.nvtx.range_pop()  # BACKWARD-PASS
+            # torch.cuda.nvtx.range_pop()  # BACKWARD-PASS
 
-            torch.cuda.nvtx.range_push('OPTIMIZER-STEP')
+            # torch.cuda.nvtx.range_push('OPTIMIZER-STEP')
             optimizer.step()
-            torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
+            # torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
+            step += 1
 
-            end = time.time()
-            step_times.append((end-start)*1000)
-    print(step_times)
-    print("INFO: Std dev", statistics.stdev(step_times))
-    print("INFO: Mean (msec)", statistics.mean(step_times))
+    print(" INFO: Total steps: ", step)
+
+    #         end = time.time()
+    #         step_times.append((end-start)*1000)
+    # print(step_times)
+    # print("INFO: Std dev", statistics.stdev(step_times))
+    # print("INFO: Mean (msec)", statistics.mean(step_times))
 
 
 
