@@ -102,7 +102,7 @@ def main():
     model = model.to(device)
     ddp_model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[local_rank], output_device=local_rank)
     if use_fp16_compress:
-        model.register_comm_hook(state=None, hook=fp16_compress_hook)
+        ddp_model.register_comm_hook(state=None, hook=fp16_compress_hook)
 
     # We only save the model who uses device "cuda:0"
     # To resume, the device for the saved model would also be "cuda:0"
