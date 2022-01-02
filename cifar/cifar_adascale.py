@@ -115,15 +115,7 @@ def main():
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
     '''
-    print(" Adascale hyperparameters")
-    print(" Base batch size: ", batch_size)
-    print(" Scale factor batch size: ", get_world_size())
-    print(" Batch size after scaling: ", batch_size*get_world_size())
-    print(" Number of steps : ")
 
-    if get_rank() == 0:
-        # tensorboard summary writer (by default created for all workers)
-        writer = SummaryWriter(tensorboard_path)
 
 
     model_filepath = os.path.join(model_dir, model_filename)
@@ -134,6 +126,17 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     torch.distributed.init_process_group(backend="nccl")
     # torch.distributed.init_process_group(backend="gloo")
+
+    if get_rank() == 0:
+        # tensorboard summary writer (by default created for all workers)
+        writer = SummaryWriter(tensorboard_path)
+
+    print(" Adascale hyperparameters")
+    print(" Base batch size: ", batch_size)
+    print(" Scale factor batch size: ", get_world_size())
+    print(" Batch size after scaling: ", batch_size*get_world_size())
+    print(" Number of steps : ")
+
 
     # Encapsulate the model on the GPU assigned to the current process
     model = torchvision.models.resnet18(pretrained=False)
