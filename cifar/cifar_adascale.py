@@ -106,7 +106,7 @@ def main():
     resume = argv.resume
     use_adascale = argv.use_adascale
     use_fp16_compress = argv.use_fp16_compress
-    tensorboard_path = f'{argv.log_dir}/worker-0}'
+    tensorboard_path = f'{argv.log_dir}/worker-0'
     weight_decay = argv.weight_decay
     momentum = argv.momentum
     # Create directories outside the PyTorch program
