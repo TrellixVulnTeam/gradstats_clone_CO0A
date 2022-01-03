@@ -145,19 +145,19 @@ def main():
     # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
     torch.distributed.init_process_group(backend="nccl")
     # torch.distributed.init_process_group(backend="gloo")
+    scale = batch_size*get_world_size()/base_batch_size
 
     if get_rank() == 0:
         # tensorboard summary writer (by default created for all workers)
-        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler--adascale-{use_adascale}-shuffle'
+        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{scale}-lr-{learning_rate}-bs-{batch_size}-scheduler--adascale-{use_adascale}-shuffle'
 
         writer = SummaryWriter(tensorboard_path)
 
-    print(" Adascale hyperparameters")
-    print(" Base batch size: ", batch_size)
-    print(" Scale factor batch size: ", batch_size*get_world_size()/base_batch_size)
-    print(" Batch size after scaling: ", batch_size*get_world_size())
-    print(" Number of steps : ")
-    scale = batch_size*get_world_size()/base_batch_size
+        print(" Adascale hyperparameters")
+        print(" Base batch size: ", batch_size)
+        print(" Scale factor batch size: ", batch_size*get_world_size()/base_batch_size)
+        print(" Batch size after scaling: ", batch_size*get_world_size())
+        print(" Number of steps : ")
 
     # Encapsulate the model on the GPU assigned to the current process
     model = torchvision.models.resnet18(pretrained=False)
