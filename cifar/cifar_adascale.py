@@ -106,7 +106,6 @@ def main():
     resume = argv.resume
     use_adascale = argv.use_adascale
     use_fp16_compress = argv.use_fp16_compress
-    tensorboard_path = f'{argv.log_dir}/worker-0'
     weight_decay = argv.weight_decay
     momentum = argv.momentum
     # Create directories outside the PyTorch program
@@ -129,6 +128,8 @@ def main():
 
     if get_rank() == 0:
         # tensorboard summary writer (by default created for all workers)
+        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}'
+
         writer = SummaryWriter(tensorboard_path)
 
     print(" Adascale hyperparameters")
