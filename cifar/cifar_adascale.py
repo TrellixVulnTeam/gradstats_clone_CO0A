@@ -207,6 +207,8 @@ def main():
 
     # # Loop over the dataset multiple times
     step = 0
+    step_scale_dep = 0
+
     done = False
     epoch = 0
     for epoch in range(num_epochs):
@@ -242,9 +244,16 @@ def main():
             loss.backward()
             if get_rank() == 0:
                 writer.add_scalar(f'Train/Loss_step', loss.item(), step)
+                if use_adascale:
+                    gain = optimizer.gain()
+                    step_scale_dep += gain
+                    writer.add_scalar(f'Gain', loss.item(), step)
+                    writer.add_scalar(f'Train/Loss_step_scale_dep', loss.item(), step_scale_dep)
+
                 writer.flush()
             optimizer.step()
             step += 1
+
 
         # TODO: This loss is for last batch in one epoch. Calculate average across epoch.
         if get_rank() == 0:
