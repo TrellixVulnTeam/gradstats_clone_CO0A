@@ -79,6 +79,7 @@ class AverageMeter(object):
 
 def main():
     num_epochs_default = 1
+    eval_freq_default = 10
     batch_size_default = 256  # 1024
     learning_rate_default = 0.1
     random_seed_default = 0
@@ -93,6 +94,7 @@ def main():
     parser.add_argument("--local_rank", type=int,
                         help="Local rank. Necessary for using the torch.distributed.launch utility.")
     parser.add_argument("--num_epochs", type=int, help="Number of training epochs.", default=num_epochs_default)
+    parser.add_argument("--eval_freq", type=int, help="Number of epochs for eval.", default=eval_freq_default)
     parser.add_argument("--batch_size", type=int, help="Training batch size for one process.",
                         default=batch_size_default)
     parser.add_argument("--learning_rate", type=float, help="Learning rate.", default=learning_rate_default)
@@ -125,6 +127,7 @@ def main():
     use_fp16_compress = argv.use_fp16_compress
     weight_decay = argv.weight_decay
     momentum = argv.momentum
+    eval_freq = argv.eval_freq
     # Create directories outside the PyTorch program
     # Do not create directory here because it is not multiprocess safe
     '''
@@ -216,7 +219,7 @@ def main():
         print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
 
         # Save and evaluate model routinely
-        if epoch % 1 == 0:
+        if epoch % eval_freq == 0:
             if local_rank == 0:
                 accuracy = evaluate(model=ddp_model, device=device, test_loader=test_loader)
                 if get_rank() == 0:
@@ -264,6 +267,7 @@ def main():
 
         lr_scheduler.step()
     print(" INFO: Total steps: ", step)
+    print(" INFO: Total step_scale_dep: ", step_scale_dep)
 
 
 
