@@ -219,9 +219,8 @@ def main():
             step += 1
         if get_rank() == 0:
             writer.add_scalar(f'Train/Loss_epoch', loss, epoch)
+            writer.flush()
 
-
-            end = time.time()
     print(" INFO: Total steps: ", step)
 
 
