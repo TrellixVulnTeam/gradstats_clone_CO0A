@@ -214,7 +214,7 @@ def main():
         print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
 
         # Save and evaluate model routinely
-        if epoch % 10 == 0:
+        if epoch % 1 == 0:
             if local_rank == 0:
                 accuracy = evaluate(model=ddp_model, device=device, test_loader=test_loader)
                 if get_rank() == 0:
