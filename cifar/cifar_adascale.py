@@ -213,10 +213,12 @@ def main():
 
             loss.backward()
             if get_rank() == 0:
-                writer.add_scalar(f'Train/Loss', loss, epoch)
+                writer.add_scalar(f'Train/Loss_step', loss, step)
                 writer.flush()
             optimizer.step()
             step += 1
+        if get_rank() == 0:
+            writer.add_scalar(f'Train/Loss_epoch', loss, epoch)
 
 
             end = time.time()
