@@ -144,7 +144,7 @@ def main():
 
     if get_rank() == 0:
         # tensorboard summary writer (by default created for all workers)
-        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler'
+        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler--adascale-{use_adascale}'
 
         writer = SummaryWriter(tensorboard_path)
 
@@ -180,8 +180,8 @@ def main():
 
     # Data should be prefetched
     # Download should be set to be False, because it is not multiprocess safe
-    train_set = torchvision.datasets.CIFAR10(root="data", train=True, download=False, transform=transform)
-    test_set = torchvision.datasets.CIFAR10(root="data", train=False, download=False, transform=transform)
+    train_set = torchvision.datasets.CIFAR10(root="/home/ubuntu/data/", train=True, download=False, transform=transform)
+    test_set = torchvision.datasets.CIFAR10(root="/home/ubuntu/data/", train=False, download=False, transform=transform)
 
     # Restricts data loading to a subset of the dataset exclusive to the current process
     train_sampler = DistributedSampler(dataset=train_set)
