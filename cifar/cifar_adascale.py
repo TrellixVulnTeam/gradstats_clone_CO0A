@@ -144,7 +144,7 @@ def main():
 
     if get_rank() == 0:
         # tensorboard summary writer (by default created for all workers)
-        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}'
+        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler'
 
         writer = SummaryWriter(tensorboard_path)
 
@@ -199,6 +199,9 @@ def main():
         print(" INFO: Not using Adascale")
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
     step_times = []
+    lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer,
+                                                        milestones=[100, 150], last_epoch=-1)
+
     # # Loop over the dataset multiple times
     step = 0
     done = False
@@ -240,6 +243,7 @@ def main():
             writer.add_scalar(f'Train/Loss_epoch', loss.item(), epoch)
             writer.flush()
 
+        lr_scheduler.step()
     print(" INFO: Total steps: ", step)
 
 
