@@ -87,6 +87,7 @@ def main():
     adascale_scale_default = 1
     weight_decaye_default = 1e-5
     momentum_default = 0.9
+    base_batch_size = 128.0
     # Each process runs on 1 GPU device specified by the local_rank argument.
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument("--local_rank", type=int,
@@ -144,16 +145,16 @@ def main():
 
     if get_rank() == 0:
         # tensorboard summary writer (by default created for all workers)
-        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler--adascale-{use_adascale}'
+        tensorboard_path = f'{argv.log_dir}/worker-0-scale-{get_world_size()}-lr-{learning_rate}-bs-{batch_size}-scheduler--adascale-{use_adascale}-shuffle'
 
         writer = SummaryWriter(tensorboard_path)
 
     print(" Adascale hyperparameters")
     print(" Base batch size: ", batch_size)
-    print(" Scale factor batch size: ", get_world_size())
+    print(" Scale factor batch size: ", batch_size*get_world_size()/base_batch_size)
     print(" Batch size after scaling: ", batch_size*get_world_size())
     print(" Number of steps : ")
-
+    scale = batch_size*get_world_size()/base_batch_size
 
     # Encapsulate the model on the GPU assigned to the current process
     model = torchvision.models.resnet18(pretrained=False)
@@ -186,7 +187,8 @@ def main():
     # Restricts data loading to a subset of the dataset exclusive to the current process
     train_sampler = DistributedSampler(dataset=train_set)
 
-    train_loader = DataLoader(dataset=train_set, batch_size=batch_size, sampler=train_sampler, num_workers=8)
+    train_loader = DataLoader(dataset=train_set, batch_size=batch_size, sampler=train_sampler, num_workers=8,
+                              shuffle=True)
     print("INFO: Length of dataloader: ", len(train_loader))
     # Test loader does not have to follow distributed sampling strategy
     test_loader = DataLoader(dataset=test_set, batch_size=128, shuffle=False, num_workers=8)
@@ -194,7 +196,8 @@ def main():
     criterion = nn.CrossEntropyLoss()
     if use_adascale:
         print(" INFO: Using Adascale ")
-        optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay))
+        optimizer = AdaScale(optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay),
+                             scale=scale)
     else:
         print(" INFO: Not using Adascale")
         optimizer = optim.SGD(ddp_model.parameters(), lr=learning_rate, momentum=momentum, weight_decay=weight_decay)
@@ -221,7 +224,12 @@ def main():
                 print("-" * 75)
                 print("Epoch: {}, Accuracy: {}".format(epoch, accuracy))
                 print("-" * 75)
+        # In distributed mode, calling the :meth:`set_epoch` method at
+        #         the beginning of each epoch **before** creating the :class:`DataLoader` iterator
+        #         is necessary to make shuffling work properly across multiple epochs. Otherwise,
+        #         the same ordering will be always used.
 
+        train_sampler.set_epoch(epoch)
         ddp_model.train()
 
         for data in train_loader:
@@ -240,6 +248,8 @@ def main():
 
         # TODO: This loss is for last batch in one epoch. Calculate average across epoch.
         if get_rank() == 0:
+            learning_rate = optimizer.param_groups[0]['lr']
+            writer.add_scalar(f'Learning Rate', learning_rate, epoch)
             writer.add_scalar(f'Train/Loss_epoch', loss.item(), epoch)
             writer.flush()
 
