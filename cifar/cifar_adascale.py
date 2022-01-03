@@ -60,6 +60,22 @@ def evaluate(model, device, test_loader):
 
     return accuracy
 
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
 
 def main():
     num_epochs_default = 1
@@ -214,12 +230,14 @@ def main():
 
             loss.backward()
             if get_rank() == 0:
-                writer.add_scalar(f'Train/Loss_step', loss, step)
+                writer.add_scalar(f'Train/Loss_step', loss.item(), step)
                 writer.flush()
             optimizer.step()
             step += 1
+
+        # TODO: This loss is for last batch in one epoch. Calculate average across epoch.
         if get_rank() == 0:
-            writer.add_scalar(f'Train/Loss_epoch', loss, epoch)
+            writer.add_scalar(f'Train/Loss_epoch', loss.item(), epoch)
             writer.flush()
 
     print(" INFO: Total steps: ", step)
