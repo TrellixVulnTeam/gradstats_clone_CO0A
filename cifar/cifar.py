@@ -176,11 +176,12 @@ def main():
 
             end = time.time()
             step_times.append((end-start)*1000)
-    print(" INFO: Total steps: ", step)
+    if local_rank==0:
+        print(" INFO: Total steps: ", step)
 
-    print(step_times)
-    print("INFO: Std dev", statistics.stdev(step_times))
-    print("INFO: Mean (msec)", statistics.mean(step_times))
+        print(step_times)
+        print("INFO: Std dev", statistics.stdev(step_times))
+        print("INFO: Mean (msec)", statistics.mean(step_times))
 
 
 
