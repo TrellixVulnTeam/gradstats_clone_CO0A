@@ -215,8 +215,9 @@ def main():
     done = False
     epoch = 0
     for epoch in range(num_epochs):
+        if local_rank ==0:
+            print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
 
-        print("Local Rank: {}, Epoch: {}, Training ...".format(local_rank, epoch))
 
         # Save and evaluate model routinely
         if epoch % eval_freq == 0:
