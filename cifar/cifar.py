@@ -172,7 +172,7 @@ def main():
             optimizer.step()
             torch.cuda.nvtx.range_pop()  # OPTIMIZER-STEP
             step += 1
-
+            # stream synchronize
 
             end = time.time()
             step_times.append((end-start)*1000)

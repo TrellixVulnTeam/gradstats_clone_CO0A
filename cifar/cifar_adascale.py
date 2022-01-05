@@ -250,8 +250,9 @@ def main():
                 if use_adascale:
                     gain = optimizer.gain()
                     step_scale_dep += gain
-                    writer.add_scalar(f'Gain', loss.item(), step)
+                    writer.add_scalar(f'Gain', gain, step)
                     writer.add_scalar(f'Train/Loss_step_scale_dep', loss.item(), step_scale_dep)
+                    writer.add_scalar(f'Train/Loss_step', loss.item(), step_scale_dep)
 
                 writer.flush()
             optimizer.step()
