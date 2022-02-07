@@ -17,7 +17,6 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-from with_replacement_sampler import ReplacementDistributedSampler
 import numpy as np
 import math
 from automl.autoscaler import AdaScale
@@ -387,8 +386,7 @@ def main_worker(args):
     collate_fn = lambda b: fast_collate(b, memory_format)
 
     if args.distributed:
-        train_sampler = ReplacementDistributedSampler(train_dataset,
-                                                      seed=2047 * args.rank)
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(
             val_dataset, shuffle=False)
     else:
